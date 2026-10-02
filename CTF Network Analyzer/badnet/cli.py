@@ -456,6 +456,83 @@ def cmd_version(globals: Globals) -> None:
         typer.echo(f"{TOOL_NAME} {__version__}")
 
 
+@app.command("stream")
+@handle_errors
+@with_globals
+def cmd_stream(
+    globals: Globals,
+    capture: Path = typer.Argument(..., help="Capture file to inspect."),
+    stream_id: int = typer.Option(
+        None, "--id", metavar="N", help="Stream id to dump (omit to list all streams)."
+    ),
+    direction: str = typer.Option(
+        "both", "--direction", help="Which direction to dump: c2s, s2c or both."
+    ),
+    carve: bool = typer.Option(
+        False, "--carve", help="Also carve embedded files by magic bytes into files/."
+    ),
+    hex_view: bool = typer.Option(
+        False, "--hex", help="Show a hex dump instead of a text preview."
+    ),
+) -> None:
+    """List TCP streams, or dump and preview one stream by --id.
+
+    A dump writes the reassembled bytes to the case ``streams/`` directory and,
+    with --carve, recovers embedded files by magic bytes into ``files/``.
+    """
+    from badnet.commands import stream as stream_cmd
+
+    ctx = RunContext(globals)
+    ctx.setup_logging()
+    stream_cmd.run(
+        ctx,
+        capture,
+        stream_id=stream_id,
+        direction=direction,
+        carve=carve,
+        hexdump=hex_view,
+    )
+
+
+@app.command("search")
+@handle_errors
+@with_globals
+def cmd_search(
+    globals: Globals,
+    target: Path = typer.Argument(..., help="Capture file or an existing case directory."),
+    regex: str = typer.Option(..., "--regex", "-e", help="Pattern to search for."),
+    literal: bool = typer.Option(
+        False, "--literal", "-F", help="Treat --regex as literal text (safest for hostile input)."
+    ),
+    ignore_case: bool = typer.Option(False, "--ignore-case", "-i", help="Case-insensitive match."),
+    max_hits: int = typer.Option(None, "--max-hits", metavar="N", help="Stop after N matches."),
+) -> None:
+    """Sweep reassembled TCP streams for a regex or literal and record the hits."""
+    from badnet.commands import search as search_cmd
+
+    ctx = RunContext(globals)
+    ctx.setup_logging()
+    search_cmd.run(
+        ctx, target, regex=regex, literal=literal, ignore_case=ignore_case, max_hits=max_hits
+    )
+
+
+@app.command("report")
+@handle_errors
+@with_globals
+def cmd_report(
+    globals: Globals,
+    target: Path = typer.Argument(..., help="Capture file or an existing case directory."),
+    top: int = typer.Option(None, "--top", metavar="N", help="Maximum rows shown per section."),
+) -> None:
+    """Write a self-contained offline HTML report (report.html) into the case."""
+    from badnet.commands import report as report_cmd
+
+    ctx = RunContext(globals)
+    ctx.setup_logging()
+    report_cmd.run(ctx, target, top=top)
+
+
 def run() -> None:
     """Console-script entry point with top-level error handling."""
     try:

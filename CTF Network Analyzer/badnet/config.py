@@ -86,7 +86,13 @@ class Limits:
     max_preview_bytes: int = 2048
     """Default cap for ``badnet stream --id N`` text previews."""
     regex_timeout_ms: int = 2000
-    """Wall-clock budget for a user-supplied regex, via ``re`` timeout support."""
+    """Wall-clock budget for regex execution in ``badnet search``.
+
+    The standard library :mod:`re` has no timeout, so this bounds the total time
+    spent *matching* between streams; reassembly time is not charged against it,
+    and a single pathological call is still not interruptible.  ``badnet search
+    --literal`` avoids the regex engine entirely and is the safe mode.
+    """
 
     def validate(self) -> None:
         """Raise :class:`ConfigError` when a limit is out of range."""

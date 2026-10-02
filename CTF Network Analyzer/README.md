@@ -170,6 +170,45 @@ Runs the same analysis, then prints a ranked findings list and prints follow-up
 commands you can paste straight into the shell. Best starting point when you have
 no idea where to begin.
 
+### Inspect and carve a stream
+
+```console
+$ badnet stream capture.pcap                 # list streams
+$ badnet stream capture.pcap --id 0          # dump stream 0 (both directions)
+$ badnet stream capture.pcap --id 0 --carve  # also carve embedded files
+```
+
+A dump writes the reassembled bytes to `streams/` and, with `--carve`, recovers
+embedded files by magic bytes into `files/`, recording their hashes. `--hex`
+shows a hex dump instead of a text preview, and `--direction c2s|s2c` picks one
+side.
+
+### Sweep for a pattern
+
+```console
+$ badnet search capture.pcap --regex 'flag\{[^}]+\}'
+$ badnet search capture.pcap --literal -i -e 'FLAG{'
+$ badnet search output/capture-516a10a3 --regex 'password|token'   # reuse a case
+```
+
+Searches reassembled TCP payload and records every hit (offset, direction,
+context) in `search.ndjson`. Offsets refer to the reassembled stream, so a hole
+left by a lost packet shifts later offsets. `--literal` (`-F`) skips the regex
+engine entirely and is the safe choice for hostile input; patterns with nested
+quantifiers are refused before they run.
+
+### Offline HTML report
+
+```console
+$ badnet report capture.pcap                  # analyse, then write report.html
+$ badnet report output/capture-516a10a3       # rebuild from an existing case
+```
+
+Writes `report.html` — fully self-contained, loading no scripts, styles or images
+from the network — plus `report.json` at the root of the case. Every value taken
+from the capture is HTML-escaped, so a capture containing `<script>` renders as
+text, never as markup.
+
 ### Common flags
 
 Available on every command — put them **after** the subcommand, e.g.
@@ -243,22 +282,23 @@ them on a capture you trust.
 
 ---
 
-## What Phase 1 does and does not do
+## What works today and what does not
 
 **Works today:** capture facts and timing, protocol breakdown, top talkers,
 connection table, TCP stream table, TCP reassembly in both directions with
 correct client/server orientation, YAML signature loading (52 patterns),
-`doctor`, append-only case storage.
+`doctor`, append-only case storage, stream dumping and magic-byte carving
+(`stream`), regex/literal search across reassembled payload (`search`), and a
+self-contained offline `report.html` (`report`).
 
-**Not yet:** `badnet stream`, `badnet search` and `badnet dns` do not exist, and
-no `report.html` is generated. `auto` says so in its own output rather than
-pretending. Artifact extraction lands next, so `analyze` and `auto` legitimately
-report `artifacts 0` and `findings 0` for now. The `http/`, `dns/`, `tls/`,
-`files/`, `hashes/` and `nmap/` case subdirectories are created but stay empty
-until then.
+**Not yet:** protocol-specific analyzers (`dns`, `http`, `tls`), automatic
+artifact extraction, and the detector rules that populate findings. So `analyze`
+and `auto` still truthfully report `artifacts 0` and `findings 0`, and the
+`http/`, `dns/`, `tls/`, `hashes/` and `nmap/` case subdirectories are created
+but stay empty until then.
 
-Every follow-up `auto` prints is runnable as-is — it points at files that exist in
-the case directory using plain `grep`, `less` and `python3 -m json.tool`.
+Every follow-up `auto` prints is runnable as-is, and it only suggests `stream`
+and `search` because those commands exist now.
 
 No SQLite. Cases are plain NDJSON plus `metadata.json`, so you can read them with
 any tool.
@@ -284,7 +324,9 @@ credentials:
 ```console
 $ badnet info examples/sample.pcap
 $ badnet analyze examples/sample.pcap --case demo
-$ badnet auto examples/sample.pcap --case demo --force
+$ badnet stream examples/sample.pcap --case demo --force --id 0
+$ badnet search examples/sample.pcap --case demo --force -e 'flag\{[^}]+\}'
+$ badnet report examples/sample.pcap --case demo --force
 ```
 
 211 packets, 7 TCP streams: HTTP, FTP with credentials, TLS, SMB2, DNS, DHCP.
@@ -342,13 +384,13 @@ $ source .venv/bin/activate
 $ pip install -e ".[dev]"
 
 $ pytest -q
-78 passed
+109 passed
 
 $ ruff check .
 All checks passed!
 
 $ ruff format --check .
-51 files already formatted
+60 files already formatted
 ```
 
 Tests run the real pipeline against a freshly generated capture, so a tshark

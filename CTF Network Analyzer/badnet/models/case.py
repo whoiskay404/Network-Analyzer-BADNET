@@ -34,6 +34,7 @@ DATASETS: dict[str, tuple[str, str]] = {
     "files": ("files", "files.ndjson"),
     "hashes": ("hashes", "hashes.ndjson"),
     "findings": ("", "findings.ndjson"),
+    "search": ("", "search.ndjson"),
     "extracted": ("files", "strings.ndjson"),
     "nmap": ("nmap", "nmap.ndjson"),
 }

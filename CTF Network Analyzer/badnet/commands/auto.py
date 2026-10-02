@@ -225,8 +225,8 @@ def _print_followups(console, ctx: RunContext, result, findings: list[Finding]) 
     streams_file = case_dir / "streams" / "streams.ndjson"
     lines: list[str] = []
 
-    # Highest-value streams to inspect by hand. `badnet stream` is not
-    # implemented yet, so point at the case file that does exist.
+    # Highest-value streams to inspect by hand, plus the raw dataset row so a
+    # reader can pivot without re-running the pipeline.
     if streams_file.is_file():
         for stream in result.streams[:3]:
             detail = (

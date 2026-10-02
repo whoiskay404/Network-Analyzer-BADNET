@@ -84,3 +84,5 @@ class SecurityError(BadnetError):
 
 class ReDoSGuardError(BadnetError):
     """A user-supplied regex exceeded the safety guard."""
+
+    exit_code = ExitCode.USAGE

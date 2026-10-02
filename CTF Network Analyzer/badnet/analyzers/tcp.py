@@ -548,7 +548,7 @@ def reassemble_stream(
     if not segments:
         raise AnalysisError(
             f"stream {stream_id} has no reassemblable TCP payload in this capture",
-            hint="run 'badnet streams' to list the streams that do have payload",
+            hint="run 'badnet stream <capture>' to list the streams that do have payload",
         )
 
     # Split into the two directions and reassemble each independently.
