@@ -23,7 +23,7 @@ from badnet.cli import app
 from badnet.config import Config
 from badnet.detectors.payload import detect
 from badnet.integrations.system_tools import detect_all
-from badnet.signatures import Signature, SignatureSet
+from badnet.signatures import Signature, SignatureSet, load_signatures
 
 requires_tshark = pytest.mark.skipif(
     not detect_all().tshark.found, reason="tshark is not installed"
@@ -124,6 +124,16 @@ def test_detector_reports_a_plain_flag_in_a_raw_blob() -> None:
     assert any(f.evidence == "flag{raw}" for f in findings)
 
 
+def test_shipped_signatures_report_a_flag_only_once() -> None:
+    """The generic brace heuristic must not repeat a flag the sharp pattern found."""
+    signatures = load_signatures(Config().effective_signature_dir)
+    blob = PayloadBlob(source="tcp-stream-0 client_to_server", text="answer=flag{only_once}")
+    findings = detect([blob], config=Config(), signatures=signatures)
+    matches = [f for f in findings if f.evidence == "flag{only_once}"]
+    assert len(matches) == 1
+    assert matches[0].detector == "payload:flag_brace"
+
+
 # ------------------------------------------------------------------ pipeline
 
 
@@ -191,3 +201,48 @@ def test_auto_finds_flags_outside_http_and_dns(tmp_path: Path) -> None:
     evidence = {f["evidence"] for f in payload["findings"]}
     assert "flag{raw_tcp_stream}" in evidence
     assert "flag{raw_udp_datagram}" in evidence
+
+
+def _write_ipv6_capture(path: Path) -> Path:
+    """A flag in an IPv6 TCP stream: reassembly must resolve ipv6.src/dst fields."""
+    from scapy.all import TCP, Ether, IPv6, Raw, wrpcap
+
+    packets = []
+    clock = [1_700_000_000.0]
+
+    def add(layer) -> None:
+        packet = Ether(src="02:00:00:00:00:01", dst="02:00:00:00:00:02") / layer
+        packet.time = clock[0]
+        clock[0] += 0.001
+        packets.append(packet)
+
+    add(
+        IPv6(src="2001:db8::1", dst="2001:db8::2")
+        / TCP(sport=51000, dport=12345, flags="S", seq=1000)
+    )
+    add(
+        IPv6(src="2001:db8::2", dst="2001:db8::1")
+        / TCP(sport=12345, dport=51000, flags="SA", seq=5000, ack=1001)
+    )
+    add(
+        IPv6(src="2001:db8::1", dst="2001:db8::2")
+        / TCP(sport=51000, dport=12345, flags="A", seq=1001, ack=5001)
+    )
+    add(
+        IPv6(src="2001:db8::1", dst="2001:db8::2")
+        / TCP(sport=51000, dport=12345, flags="PA", seq=1001, ack=5001)
+        / Raw(load=b"flag{ipv6_tcp_payload}")
+    )
+
+    wrpcap(str(path), packets, linktype=1)
+    return path
+
+
+@requires_tshark
+def test_auto_finds_a_flag_in_an_ipv6_tcp_stream(tmp_path: Path) -> None:
+    capture = _write_ipv6_capture(tmp_path / "raw6.pcap")
+    result = runner.invoke(app, ["auto", str(capture), "--output-dir", str(tmp_path), "--json"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    evidence = {f["evidence"] for f in payload["findings"]}
+    assert "flag{ipv6_tcp_payload}" in evidence

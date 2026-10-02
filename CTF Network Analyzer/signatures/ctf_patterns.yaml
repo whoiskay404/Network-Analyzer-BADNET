@@ -34,13 +34,16 @@ patterns:
 
   - id: flag_generic_brace
     title: "Possible CTF indicator (brace-delimited token)"
-    regex: '\b[A-Za-z][A-Za-z0-9_]{1,20}\{[A-Za-z0-9_\-!@#$%^&*+=./:, ]{4,120}\}'
+    regex: '(?i)\b(?!(?:flag|ctf|key|token|secret|picoctf|htb|thm|tryhackme|bugcrowd|cyberctf|cryptohack))[A-Za-z][A-Za-z0-9_]{1,20}\{[A-Za-z0-9_\-!@#$%^&*+=./:, ]{4,120}\}'
     severity: medium
     confidence: medium
     category: flag
     description: >-
-      Any word followed by a brace-delimited body. Matches GUID-ish and
-      templated strings as well as real flags, so confidence is medium.
+      Any word followed by a brace-delimited body, for flags with an unknown
+      prefix. Known prefixes (flag/ctf/key/token/secret and CTF platforms) are
+      deliberately excluded so they are reported once, by the sharper patterns
+      above, not twice. Still matches GUID-ish and templated strings, so
+      confidence is medium.
     tags: [ctf, flag, heuristic]
 
   - id: flag_prefix

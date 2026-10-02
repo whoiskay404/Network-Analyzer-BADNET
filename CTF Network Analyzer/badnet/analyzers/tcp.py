@@ -53,6 +53,8 @@ STREAM_FIELDS: tuple[str, ...] = (
     "frame.time_epoch",
     "ip.src",
     "ip.dst",
+    "ipv6.src",
+    "ipv6.dst",
     "tcp.srcport",
     "tcp.dstport",
     "tcp.stream",

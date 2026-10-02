@@ -244,7 +244,7 @@ connections  78
 streams      7
 http         8 request(s), 8 response(s)
 dns          70 query(ies), 62 response(s)
-findings     25
+findings     24
 reader       tshark
 elapsed      3.6s
 
@@ -268,7 +268,7 @@ $ badnet auto capture.pcap
 ```
 
 ```
---------------------------------- CTF FINDINGS  (25) --------------------------
+--------------------------------- CTF FINDINGS  (24) --------------------------
 [!]  flag        Possible CTF flag (brace form)  high    flag{unit_testing_is_great}
 [!]  flag        Possible CTF flag (brace form)  high    flag{b64_in_http_post_wins}
 [~]  flag        Possible CTF flag (prefixed)    medium  ctf-challenge
@@ -674,7 +674,7 @@ $ source .venv/bin/activate
 $ pip install -e ".[dev]"
 
 $ pytest -q
-168 passed
+170 passed
 
 $ ruff check .
 All checks passed!
