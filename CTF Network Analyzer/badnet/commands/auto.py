@@ -1,9 +1,9 @@
 """``badnet auto`` - summary first, then ranked CTF findings and follow-ups.
 
-Implementation note: the full CTF pipeline (detectors, correlation, artifact
-extraction) is wired in the detector phases.  This module is the presentation
-contract: a short narrative summary, a ranked findings table where every row
-explains itself, and concrete next commands.
+The HTTP detector phase is wired; correlation and artifact extraction are still
+to come.  This module is the presentation contract: a short narrative summary,
+a ranked findings table where every row explains itself, and concrete next
+commands.
 """
 
 from __future__ import annotations
@@ -113,6 +113,7 @@ def _narrative(ctx: RunContext, result) -> dict[str, object]:
         "duration": info.duration,
         "connections": len(result.connections),
         "streams": len(result.streams),
+        "http_requests": getattr(result.http_stats, "requests", 0),
         "files": len(result.artifacts),
         "hashes": len([a for a in result.artifacts if a.sha256]),
         "reader": result.ctx.reader,
@@ -131,6 +132,7 @@ def _print_summary(console, ctx: RunContext, result, summary: dict) -> None:
                 ("hosts seen", summary.get("hosts")),
                 ("connections", summary.get("connections")),
                 ("TCP streams", summary.get("streams")),
+                ("HTTP requests", summary.get("http_requests")),
                 ("files recovered", summary.get("files")),
                 ("hashed artifacts", summary.get("hashes")),
                 ("reader", summary.get("reader")),
@@ -151,11 +153,12 @@ def _print_findings(console, ctx: RunContext, findings: list[Finding]) -> None:
         )
         return
     from rich.table import Table
+    from rich.text import Text
 
     verbose = ctx.verbose_secrets()
     limit = ctx.g.limit or ctx.config.output.max_findings_shown
     table = Table(box=None, pad_edge=False, header_style="bold", show_lines=False)
-    table.add_column("", no_wrap=True, width=2)
+    table.add_column("", no_wrap=True, width=3)
     table.add_column("category", style="cyan", no_wrap=True)
     table.add_column("title", overflow="fold", max_width=52)
     table.add_column("sev", no_wrap=True)
@@ -167,7 +170,7 @@ def _print_findings(console, ctx: RunContext, findings: list[Finding]) -> None:
             str(f.severity), " "
         )
         evidence = f.evidence if verbose else _redact_evidence(f.evidence)
-        table.add_row(marker, str(f.category), f.title, str(f.severity), evidence, f.source)
+        table.add_row(Text(marker), str(f.category), f.title, str(f.severity), evidence, f.source)
     console.print(table)
     if len(findings) > limit:
         console.print(
@@ -245,6 +248,10 @@ def _print_followups(console, ctx: RunContext, result, findings: list[Finding]) 
             "# notable services"
         )
         lines.append(f'grep \'"proto": "UDP"\' {connections_file}   # non-TCP conversations')
+
+    http_file = case_dir / "http" / "http.ndjson"
+    if http_file.is_file():
+        lines.append(f"less {http_file}   # parsed HTTP exchanges (headers + bodies)")
 
     if any(f.category == "flag" for f in findings):
         lines.append(f"grep -ri 'flag' {case_dir}   # confirm recovered flags")

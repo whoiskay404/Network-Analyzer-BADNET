@@ -11,13 +11,16 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from badnet.analyzers import http as http_analyzer
 from badnet.analyzers import pcap as pcap_analyzer
 from badnet.analyzers import protocols as protocols_analyzer
 from badnet.analyzers import tcp as tcp_analyzer
 from badnet.analyzers.pipeline import PipelineContext, validate_input
 from badnet.config import Config
+from badnet.detectors import http as http_detector
 from badnet.models.finding import Finding
 from badnet.models.pcapinfo import PcapInfo
+from badnet.signatures import load_signatures
 from badnet.storage.casestore import CaseStore
 from badnet.utils.hashing import hash_file
 from badnet.utils.logging import get_logger
@@ -77,9 +80,9 @@ def run_case(
     Parameters
     ----------
     phases:
-        Subset of the pipeline to run.  ``dns``/``http``/``tls``/``files`` are
-        implemented in later phases of the build and are skipped with a log
-        message when they are not registered yet.
+        Subset of the pipeline to run.  ``http`` is implemented; ``dns``/``tls``/
+        ``files`` are implemented in later phases of the build and are skipped
+        with a log message when they are not registered yet.
     on_case_created:
         Called with the case :class:`~pathlib.Path` as soon as the directory
         exists, before any analysis runs.  The CLI uses this to attach a log
@@ -200,6 +203,52 @@ def _run_phases(
             writer.write_many(connections)
         with store.dataset("streams") as writer:
             writer.write_many(streams)
+
+    # ------------------------------------------------------------ phase: http
+    _record(result, "http")
+    if "http" in phases:
+        _run_http(result, store, streams)
+
+
+def _run_http(result: CaseResult, store: CaseStore, streams) -> None:
+    """Parse HTTP exchanges and run the HTTP detectors over them.
+
+    Findings are written to the ``findings`` dataset and kept in memory for the
+    reporters.  When a caller runs the ``http`` phase without the ``streams``
+    phase there is nothing to reassemble, so the phase records a warning rather
+    than silently producing zero results.
+    """
+    ctx = result.ctx
+    if not streams:
+        ctx.warn("http phase requested but no streams were tracked; skipping HTTP parsing")
+        return
+
+    analysis = http_analyzer.analyze(ctx, streams)
+    result.http_stats = analysis.stats
+    result.http_top = list(analysis.stats.top_paths)
+    with store.dataset("http") as writer:
+        writer.write_many(analysis.exchanges)
+    for warning in analysis.warnings:
+        ctx.warn(warning)
+
+    signatures = load_signatures(ctx.config.effective_signature_dir)
+    findings = http_detector.detect(
+        analysis.exchanges,
+        config=ctx.config,
+        signatures=signatures,
+    )
+    result.findings = findings
+    if findings:
+        with store.dataset("findings") as writer:
+            writer.write_many(findings)
+    store.metadata.options["http"] = analysis.stats.to_dict()
+    store.metadata.options["findings_count"] = len(findings)
+    log.info(
+        "http: %d exchange(s), %d finding(s) from %d http stream(s)",
+        len(analysis.exchanges),
+        len(findings),
+        len(streams),
+    )
 
 
 def _record(result: CaseResult, phase: str) -> None:

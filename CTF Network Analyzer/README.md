@@ -130,6 +130,8 @@ capture      capture.pcap
 packets      211
 connections  78
 streams      7
+http         8 request(s), 8 response(s)
+findings     21
 reader       tshark
 elapsed      3.6s
 
@@ -169,6 +171,23 @@ $ badnet auto capture.pcap
 Runs the same analysis, then prints a ranked findings list and prints follow-up
 commands you can paste straight into the shell. Best starting point when you have
 no idea where to begin.
+
+### Read the HTTP traffic
+
+`analyze`, `auto` and `report` parse HTTP/1.x out of the HTTP-labelled TCP
+streams and run the YAML signature set over every request and response. Parsed
+exchanges go to `http/http.ndjson` (method, URI, headers, a bounded body preview,
+and the paired response) and every finding goes to `findings.ndjson`: flags,
+credentials, `Authorization` headers, secrets, configured endpoints and
+interesting file extensions. Secrets stay masked in the terminal unless you pass
+`--verbose`.
+
+```console
+$ badnet auto capture.pcap
+...
+$ grep 'flag{' output/capture-516a10a3/http/http.ndjson   # parsed exchanges
+$ cat output/capture-516a10a3/findings.ndjson             # every finding
+```
 
 ### Inspect and carve a stream
 
@@ -270,6 +289,7 @@ Useful knobs:
 | `output_dir` | Where cases are written |
 | `interesting_ports` | Ports highlighted in tables |
 | `interesting_endpoints` | URI paths worth a look (`/admin`, `/.env`, `/backup`…) |
+| `interesting_extensions` | URI file types worth a look (`.sql`, `.zip`, `.key`…) |
 | `dns` | DNS-tunnelling detection thresholds |
 | `limits` | Caps on artifact size, decompression, regex time |
 | `output.redact_secrets` | `false` shows passwords and tokens in full |
@@ -288,17 +308,19 @@ them on a capture you trust.
 connection table, TCP stream table, TCP reassembly in both directions with
 correct client/server orientation, YAML signature loading (52 patterns),
 `doctor`, append-only case storage, stream dumping and magic-byte carving
-(`stream`), regex/literal search across reassembled payload (`search`), and a
-self-contained offline `report.html` (`report`).
+(`stream`), regex/literal search across reassembled payload (`search`), a
+self-contained offline `report.html` (`report`), and an HTTP/1.x parser over
+reassembled streams with an HTTP detector — flags, credentials, `Authorization`
+headers, secrets, endpoints and file extensions — that populates
+`findings.ndjson`, with bounded body previews, gzip/deflate and chunked decoding.
 
-**Not yet:** protocol-specific analyzers (`dns`, `http`, `tls`), automatic
-artifact extraction, and the detector rules that populate findings. So `analyze`
-and `auto` still truthfully report `artifacts 0` and `findings 0`, and the
-`http/`, `dns/`, `tls/`, `hashes/` and `nmap/` case subdirectories are created
-but stay empty until then.
+**Not yet:** the `dns` and `tls` analyzers, automatic artifact extraction, and the
+DNS/TLS detector rules. `analyze` and `auto` now report real HTTP request and
+finding counts, while `artifacts` stays `0` and the `dns/`, `tls/`, `hashes/` and
+`nmap/` case subdirectories are created but stay empty until those land.
 
-Every follow-up `auto` prints is runnable as-is, and it only suggests `stream`
-and `search` because those commands exist now.
+Every follow-up `auto` prints is runnable as-is; it only points at commands and
+files that exist.
 
 No SQLite. Cases are plain NDJSON plus `metadata.json`, so you can read them with
 any tool.
@@ -324,6 +346,7 @@ credentials:
 ```console
 $ badnet info examples/sample.pcap
 $ badnet analyze examples/sample.pcap --case demo
+$ badnet auto examples/sample.pcap --case demo --force   # ranked findings incl. the flag
 $ badnet stream examples/sample.pcap --case demo --force --id 0
 $ badnet search examples/sample.pcap --case demo --force -e 'flag\{[^}]+\}'
 $ badnet report examples/sample.pcap --case demo --force
@@ -384,13 +407,13 @@ $ source .venv/bin/activate
 $ pip install -e ".[dev]"
 
 $ pytest -q
-109 passed
+129 passed
 
 $ ruff check .
 All checks passed!
 
 $ ruff format --check .
-60 files already formatted
+65 files already formatted
 ```
 
 Tests run the real pipeline against a freshly generated capture, so a tshark

@@ -115,7 +115,7 @@ def run(
 
     console = ctx.console()
     ctx.banner(store.case.name)
-    term.section(console, "Search", subtitle=f"{regex!r} in {capture_path.name}")
+    term.section(console, "Search", subtitle=f"{regex} in {capture_path.name}")
     if not hits:
         console.print(
             f"  [dim]no match in {searched} stream direction(s); "
