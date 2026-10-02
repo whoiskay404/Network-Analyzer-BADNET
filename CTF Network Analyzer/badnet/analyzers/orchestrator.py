@@ -143,6 +143,36 @@ def run_case(
         case=store, ctx=ctx, info=PcapInfo(path=str(path), file_size=0, capture_format=fmt_kind)
     )
 
+    try:
+        _run_phases(result, phases, store, fmt_kind=fmt_kind, fmt_detail=fmt_detail)
+    except (KeyboardInterrupt, SystemExit):
+        # Ctrl-C keeps whatever was already written, but the case must not be
+        # left looking complete: partial evidence has to stay visibly partial.
+        store.close(status="incomplete")
+        log.warning("case %s interrupted; partial results kept and marked incomplete", name)
+        raise
+    except Exception:
+        store.close(status="failed")
+        raise
+
+    result.duration = time.monotonic() - started
+    store.metadata.options["pipeline_seconds"] = round(result.duration, 3)
+    store.close(status="complete")
+    log.info("case %s analysed in %.2fs", name, result.duration)
+    return result
+
+
+def _run_phases(
+    result: CaseResult,
+    phases,
+    store: CaseStore,
+    *,
+    fmt_kind: str,
+    fmt_detail: str,
+) -> None:
+    """Run the pipeline phases in fixed order, writing each dataset as it goes."""
+    ctx = result.ctx
+
     # ------------------------------------------------------------ phase: info
     _record(result, "info")
     if "info" in phases:
@@ -150,7 +180,7 @@ def run_case(
         for warning in result.info.warnings:
             ctx.warn(warning)
     else:
-        result.info = _minimal_info(path, fmt_kind, fmt_detail)
+        result.info = _minimal_info(ctx.pcap_path, fmt_kind, fmt_detail)
 
     # -------------------------------------------------------- phase: protocols
     _record(result, "protocols")
@@ -170,12 +200,6 @@ def run_case(
             writer.write_many(connections)
         with store.dataset("streams") as writer:
             writer.write_many(streams)
-
-    result.duration = time.monotonic() - started
-    store.metadata.options["pipeline_seconds"] = round(result.duration, 3)
-    store.close(status="complete")
-    log.info("case %s analysed in %.2fs", name, result.duration)
-    return result
 
 
 def _record(result: CaseResult, phase: str) -> None:

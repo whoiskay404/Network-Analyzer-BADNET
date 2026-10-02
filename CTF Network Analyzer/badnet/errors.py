@@ -54,6 +54,12 @@ class ConfigError(BadnetError):
     exit_code = ExitCode.USAGE
 
 
+class UsageError(BadnetError):
+    """A command-line flag was given an unusable value (bad number, out of range)."""
+
+    exit_code = ExitCode.USAGE
+
+
 class CaseExistsError(BadnetError):
     """A case directory already exists and ``--force`` was not supplied."""
 

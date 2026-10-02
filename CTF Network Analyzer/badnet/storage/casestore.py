@@ -352,7 +352,10 @@ class CaseStore:
         from badnet.models.case import utc_now_iso
 
         self.metadata.analysis_finished = utc_now_iso()
-        self.case.completed = self.metadata.analysis_finished
+        # `completed` means the analysis actually finished.  An interrupted or
+        # failed run keeps the timestamp in `analysis_finished` but must not
+        # look finished to anyone reading metadata.json.
+        self.case.completed = self.metadata.analysis_finished if status == "complete" else None
         if self.metadata.runs:
             self.metadata.runs[-1]["finished"] = self.metadata.analysis_finished
             self.metadata.runs[-1]["status"] = status

@@ -66,6 +66,9 @@ def run(ctx: RunContext, capture: Path, *, fast: bool = False) -> None:
     console = ctx.console()
     from badnet.reporting import terminal as term
 
+    # --limit caps the endpoint tables; output.default_limit is the shipped default.
+    limit = ctx.g.limit or ctx.config.output.default_limit
+
     ctx.banner(Path(path).name)
     term.section(console, "Capture")
     pairs = [
@@ -100,9 +103,9 @@ def run(ctx: RunContext, capture: Path, *, fast: bool = False) -> None:
         console.print("  [dim]no protocol layers decoded[/dim]")
 
     term.section(console, "Top talkers")
-    console.print(_endpoint_block("sources", info.top_sources))
-    console.print(_endpoint_block("destinations", info.top_destinations))
-    console.print(_endpoint_block("ports", info.top_ports))
+    console.print(_endpoint_block("sources", info.top_sources[:limit]))
+    console.print(_endpoint_block("destinations", info.top_destinations[:limit]))
+    console.print(_endpoint_block("ports", info.top_ports[:limit]))
 
 
 def _endpoint_block(title: str, endpoints) -> object:

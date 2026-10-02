@@ -69,6 +69,13 @@ def run(ctx: RunContext, capture: Path, *, ctf: bool = True) -> object:
     findings = rank(result.findings) if ctf else result.findings
     summary = _narrative(ctx, result)
 
+    # `auto` is a superset of `analyze`, so the case layout must match: write the
+    # same summary.txt in every output mode, otherwise the follow-ups below would
+    # point at a file that was never created.
+    from badnet.commands.analyze import write_summary
+
+    write_summary(ctx, result)
+
     if ctx.g.wants_json:
         ctx.emit_json(
             {
@@ -164,8 +171,7 @@ def _print_findings(console, ctx: RunContext, findings: list[Finding]) -> None:
     console.print(table)
     if len(findings) > limit:
         console.print(
-            f"  [dim]{len(findings) - limit} more finding(s); "
-            "use --limit N or see findings.ndjson / report.html[/dim]"
+            f"  [dim]{len(findings) - limit} more finding(s); use --limit N to show them all[/dim]"
         )
     # Explain each finding in full below the table (the "why").
     term.section(console, "Why each finding fired", subtitle="(explanations + evidence)")
@@ -205,25 +211,74 @@ def _redact_evidence(text: str) -> str:
     return " ".join(out)
 
 
+def _available_commands() -> set[str]:
+    """Names of commands the CLI actually registers, for honest suggestions."""
+    from badnet.cli import app
+
+    return {c.name for c in app.registered_commands if c.name}
+
+
 def _print_followups(console, ctx: RunContext, result, findings: list[Finding]) -> None:
     term.section(console, "Suggested manual follow-ups")
     case_dir = result.case_dir
-    capture = Path(result.case.case.input_path)
+    available = _available_commands()
+    streams_file = case_dir / "streams" / "streams.ndjson"
     lines: list[str] = []
-    # Highest-value streams to inspect by hand.
-    for stream in result.streams[:3]:
+
+    # Highest-value streams to inspect by hand. `badnet stream` is not
+    # implemented yet, so point at the case file that does exist.
+    if streams_file.is_file():
+        for stream in result.streams[:3]:
+            detail = (
+                f"# {stream.app_protocol or stream.proto} "
+                f"{stream.client_label} -> {stream.server_label}, {human_size(stream.bytes)}"
+            )
+            lines.append(
+                f"grep '\"stream_id\": {stream.stream_id}' {streams_file} "
+                f"| python3 -m json.tool   {detail}"
+            )
+
+    connections_file = case_dir / "connections.ndjson"
+    if connections_file.is_file():
         lines.append(
-            f"badnet stream {capture} --id {stream.stream_id}   "
-            f"# {stream.app_protocol or stream.proto} {stream.client_label} -> {stream.server_label}, "
-            f"{human_size(stream.bytes)}"
+            f'grep -E \'"service": "(http|https|ftp|ssh|smb)"\' {connections_file}   '
+            "# notable services"
         )
+        lines.append(f'grep \'"proto": "UDP"\' {connections_file}   # non-TCP conversations')
+
     if any(f.category == "flag" for f in findings):
-        lines.append(f"grep -ri 'flag' {case_dir / 'files'}   # confirm recovered flags")
-    if any(f.category == "dns" for f in findings):
-        lines.append(f"badnet dns {capture} --all --tunnel-only   # dig into the DNS pattern")
-    if result.artifacts:
-        lines.append(f"badnet hashes {case_dir / 'files'}/*   # verify artifact hashes")
-    lines.append(f"badnet search {capture} --regex 'flag\\{{|password|token'   # sweep everything")
-    lines.append(f"less {case_dir / 'report.html'}   # full offline report")
+        lines.append(f"grep -ri 'flag' {case_dir}   # confirm recovered flags")
+    if any(f.category == "dns" for f in findings) and connections_file.is_file():
+        lines.append(
+            f'grep \'"proto": "UDP"\' {connections_file} | grep \'"service": "dns"\'   '
+            "# DNS traffic"
+        )
+    if result.artifacts and (case_dir / "files").is_dir():
+        lines.append(f"ls -la {case_dir / 'files'}   # recovered artifacts")
+
+    # Only suggest commands that exist right now.
+    if "search" in available:
+        lines.append(
+            f"badnet search {case_dir} --regex 'flag\\{{|password|token'   # sweep everything"
+        )
+    if "stream" in available:
+        lines.append(f"badnet stream {result.case.case.input_path}   # interactive stream view")
+
+    report = case_dir / "report.html"
+    if report.is_file():
+        lines.append(f"less {report}   # full offline report")
+    summary_file = case_dir / "summary.txt"
+    if summary_file.is_file():
+        lines.append(f"less {summary_file}   # case summary")
+    if (case_dir / "metadata.json").is_file():
+        lines.append(f"less {case_dir / 'metadata.json'}   # capture facts and per-run stats")
+
+    if not lines:
+        console.print("  [dim]no follow-ups available for this capture[/dim]")
+        return
     for line in lines:
         console.print(f"  [dim]$[/dim] {line}")
+    missing = sorted({"stream", "search"} - available)
+    if missing:
+        quoted = " and ".join(f"badnet {name}" for name in missing)
+        console.print(f"  [dim]note: {quoted} not implemented yet[/dim]")

@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# BADNET output: case directories and datasets are local evidence, not source.
+output/
+*.ndjson
+*.case/
+
+# User configuration (may contain local paths or secrets)
+badnet.yaml
+badnet.local.yaml
+
+# Logs and debug artefacts
+*.log
+
+# Secrets / credentials - never commit
+.env
+.env.*
+*.pem
+*.key
+*.p12
+id_rsa*
+credentials.json
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp

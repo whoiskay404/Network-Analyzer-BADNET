@@ -8,6 +8,7 @@ the case directory layout.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -242,6 +243,161 @@ def test_reassembly_has_no_holes_for_a_complete_capture(analyzed: Path, sample_p
         assert data.client.gaps == 0 and data.server.gaps == 0, row["stream_id"]
 
 
+def test_auto_followups_only_suggest_real_commands_and_files(
+    committed_sample: Path, tmp_path: Path
+) -> None:
+    """`auto` must never tell the user to run something that does not exist."""
+    out_dir = tmp_path / "output"
+    result = runner.invoke(
+        app,
+        [
+            "auto",
+            str(committed_sample),
+            "--case",
+            "fu",
+            "--output-dir",
+            str(out_dir),
+            "--no-color",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    out = result.stdout
+    # The disclaimer line names unimplemented commands on purpose; every other
+    # `badnet ...` token must be a command the CLI actually registers.
+    advice = "\n".join(line for line in out.splitlines() if "not implemented" not in line)
+    registered = {c.name for c in app.registered_commands if c.name}
+    for token in re.findall(r"badnet\s+([a-z][a-z-]*)", advice):
+        assert token in registered, f"auto suggests missing command: badnet {token}"
+
+    # Every path `auto` tells the user to open must actually exist on disk.
+    for raw in re.findall(r"(?:grep|less)\s+(?:-[a-zA-Z]+\s+)*(\S+)", out):
+        candidate = raw.rstrip("*/")
+        if candidate.startswith(("output", str(out_dir))):
+            assert Path(candidate).exists(), f"auto suggests missing file: {candidate}"
+
+    # Nothing may point at the unimplemented report.
+    assert "report.html" not in out
+
+
+def test_auto_writes_same_case_layout_as_analyze(committed_sample: Path, tmp_path: Path) -> None:
+    """`auto` must produce the same files as `analyze`, including summary.txt."""
+    analyze_dir = tmp_path / "a"
+    auto_dir = tmp_path / "b"
+    assert (
+        runner.invoke(
+            app,
+            [
+                "analyze",
+                str(committed_sample),
+                "--case",
+                "x",
+                "--output-dir",
+                str(analyze_dir),
+                "-q",
+            ],
+        ).exit_code
+        == 0
+    )
+    assert (
+        runner.invoke(
+            app,
+            ["auto", str(committed_sample), "--case", "x", "--output-dir", str(auto_dir), "-q"],
+        ).exit_code
+        == 0
+    )
+
+    def layout(root: Path) -> set[str]:
+        case = next(root.iterdir())
+        return {p.relative_to(case).as_posix() for p in case.rglob("*") if p.is_file()}
+
+    assert layout(analyze_dir) == layout(auto_dir)
+    assert "summary.txt" in layout(auto_dir)
+    assert "streams/streams.ndjson" in layout(auto_dir)
+
+
+def test_json_mode_writes_the_same_case_layout(committed_sample: Path, tmp_path: Path) -> None:
+    """--json changes stdout only; the case directory must be identical."""
+    layouts = {}
+    for label, extra in (("human", ["-q"]), ("json", ["--json", "-q"])):
+        out_dir = tmp_path / label
+        result = runner.invoke(
+            app,
+            [
+                "analyze",
+                str(committed_sample),
+                "--case",
+                "x",
+                "--output-dir",
+                str(out_dir),
+                *extra,
+            ],
+        )
+        assert result.exit_code == 0, result.stdout
+        case = next(out_dir.iterdir())
+        layouts[label] = {p.relative_to(case).as_posix() for p in case.rglob("*") if p.is_file()}
+
+    assert layouts["human"] == layouts["json"]
+    assert "summary.txt" in layouts["json"]
+
+
+def test_scapy_fallback_is_used_and_reported(committed_sample: Path, monkeypatch) -> None:
+    """Without tshark the pipeline must fall back to Scapy *and say so*."""
+    from badnet.integrations import tshark as tshark_mod
+
+    real_detect = tshark_mod.detect
+
+    def fake_detect(tshark_override=None, capinfos_override=None):
+        return tshark_mod.TsharkInfo(
+            tshark=None, tshark_version=None, capinfos=None, capinfos_version=None
+        )
+
+    monkeypatch.setattr(tshark_mod, "detect", fake_detect)
+    result = runner.invoke(app, ["info", str(committed_sample), "--json", "-q"])
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["reader"] == "scapy"
+    assert payload["degraded"], "scapy fallback must report what capability was lost"
+    monkeypatch.setattr(tshark_mod, "detect", real_detect)
+
+
+def test_interrupt_marks_case_incomplete(committed_sample: Path, tmp_path: Path) -> None:
+    """Ctrl-C must exit 130 and never leave the case looking complete."""
+    from badnet.analyzers import pcap as pcap_mod
+
+    def boom(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    original = pcap_mod.analyze
+    pcap_mod.analyze = boom
+    try:
+        result = runner.invoke(
+            app,
+            ["analyze", str(committed_sample), "--output-dir", str(tmp_path), "--case", "i"],
+        )
+    finally:
+        pcap_mod.analyze = original
+
+    assert result.exit_code == 130, f"expected 130, got {result.exit_code}"
+    case = next(p for p in tmp_path.iterdir() if p.is_dir())
+    meta = json.loads((case / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["case"]["status"] == "incomplete"
+    assert meta["case"]["completed"] is None, "interrupted case must not look finished"
+    assert all(r.get("status") != "complete" for r in meta.get("runs", []))
+
+
+def test_successful_case_is_marked_complete(committed_sample: Path, tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["analyze", str(committed_sample), "--output-dir", str(tmp_path), "--case", "d", "-q"],
+    )
+    assert result.exit_code == 0, result.stdout
+    case = next(p for p in tmp_path.iterdir() if p.is_dir())
+    meta = json.loads((case / "metadata.json").read_text(encoding="utf-8"))
+    assert meta["case"]["status"] == "complete"
+    assert meta["case"]["completed"], "a finished case needs a completion timestamp"
+
+
 def test_info_command_reports_capture_facts(committed_sample: Path) -> None:
     result = runner.invoke(app, ["info", str(committed_sample), "--json"])
     assert result.exit_code == 0, result.stdout
@@ -249,6 +405,51 @@ def test_info_command_reports_capture_facts(committed_sample: Path) -> None:
     assert payload["info"]["packet_count"] > 0
     assert payload["protocols"]
     assert payload["reader"] in {"tshark", "scapy"}
+
+
+def test_limit_caps_info_tables(committed_sample: Path) -> None:
+    """--limit must actually shorten the endpoint tables, not be silently ignored."""
+    narrow = runner.invoke(app, ["info", str(committed_sample), "--limit", "2", "--no-color"])
+    wide = runner.invoke(app, ["info", str(committed_sample), "--limit", "100", "--no-color"])
+    assert narrow.exit_code == 0, narrow.stdout
+    assert wide.exit_code == 0, wide.stdout
+    # 0.0.0.0 is the fifth-ranked source, so it must be cut by --limit 2 and
+    # present at --limit 100.
+    assert "0.0.0.0" not in narrow.stdout
+    assert "0.0.0.0" in wide.stdout
+
+
+def test_info_default_limit_honours_config(committed_sample: Path, tmp_path: Path) -> None:
+    """`output.default_limit` is documented as the default `--limit`; it must work."""
+    from badnet.config import Config
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("output:\n  default_limit: 2\n", encoding="utf-8")
+    limited = runner.invoke(
+        app, ["info", str(committed_sample), "--config", str(cfg), "--no-color"]
+    )
+    override = runner.invoke(app, ["info", str(committed_sample), "--limit", "100", "--no-color"])
+    assert limited.exit_code == 0, limited.stdout
+    assert override.exit_code == 0, override.stdout
+    # default_limit=2 must cut what the default (50) shows, and --limit must win over it.
+    assert "0.0.0.0" not in limited.stdout
+    assert "0.0.0.0" in override.stdout
+    assert Config().output.default_limit >= 1
+
+
+def test_include_banner_false_suppresses_banner(committed_sample: Path, tmp_path: Path) -> None:
+    """`output.include_banner` is user-facing config; it must not be a no-op."""
+    default = runner.invoke(app, ["info", str(committed_sample), "--no-color"])
+    assert default.exit_code == 0, default.stdout
+    assert "BADNET" in default.stdout
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("output:\n  include_banner: false\n", encoding="utf-8")
+    quiet = runner.invoke(app, ["info", str(committed_sample), "--config", str(cfg), "--no-color"])
+    assert quiet.exit_code == 0, quiet.stdout
+    assert "BADNET" not in quiet.stdout
+    # The rest of the output must still be there.
+    assert "Capture" in quiet.stdout
 
 
 def test_info_creates_no_case_directory(committed_sample: Path, tmp_path: Path) -> None:

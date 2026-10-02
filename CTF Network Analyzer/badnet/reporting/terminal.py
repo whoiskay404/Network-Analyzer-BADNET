@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
+import sys
 from collections.abc import Iterable, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -40,6 +43,30 @@ SEVERITY_ORDER = ("high", "medium", "low", "info")
 BANNER = f"[bold cyan]{TOOL_NAME}[/bold cyan] [dim]v{__version__}[/dim] {TOOL_TAGLINE}"
 
 
+def safe_stream(stream):
+    """Return a text stream that cannot raise :class:`UnicodeEncodeError`.
+
+    Under an ASCII locale (``LANG=C``/``LC_ALL=C`` - still common on minimal
+    installs, cron and CI) printing a capture path or an HTTP URI containing a
+    non-ASCII character would otherwise abort the command with a Rich traceback.
+    Untrusted capture data must never be able to crash the tool, so anything the
+    terminal cannot represent is replaced rather than raised.
+    """
+    if stream is None:
+        return None
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return stream
+    encoding = getattr(stream, "encoding", None) or "ascii"
+    # Check the codec can actually represent a wide character.
+    try:
+        "\u00e9\U0001f600".encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        with contextlib.suppress(ValueError, OSError):  # pragma: no cover
+            reconfigure(errors="replace")
+    return stream
+
+
 def make_console(
     *, no_color: bool = False, quiet: bool = False, force_terminal: bool | None = None
 ) -> Console:
@@ -51,6 +78,18 @@ def make_console(
         soft_wrap=False,
         highlight=False,
         emoji=False,
+        file=safe_stream(sys.stdout),
+    )
+
+
+def make_error_console() -> Console:
+    """A console for stderr that tolerates an ASCII-only terminal."""
+    return Console(
+        stderr=True,
+        no_color=os.environ.get("NO_COLOR") is not None,
+        highlight=False,
+        emoji=False,
+        file=safe_stream(sys.stderr),
     )
 
 

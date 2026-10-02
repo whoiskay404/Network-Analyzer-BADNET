@@ -1,0 +1,13 @@
+# Normalise to LF in the repository so Windows and Kali checkouts agree.
+# Without this, git rewrites every line when switching between the two, which
+# produces whole-file diffs and can break shell scripts run on Kali.
+* text=auto eol=lf
+
+# Binary evidence must never be touched.
+*.pcap binary
+*.pcapng binary
+*.png binary
+*.jpg binary
+
+# Keep generated files out of language stats.
+*.ndjson linguist-generated

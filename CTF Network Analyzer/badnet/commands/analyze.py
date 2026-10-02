@@ -32,7 +32,11 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
 
     case_dir = result.case_dir
     info = result.info
-    summary_text = _summary_text(ctx, result)
+
+    # The case directory is written identically in every output mode: --json only
+    # changes stdout, never what lands on disk.  Scripts may run either mode and
+    # rely on summary.txt being there.
+    write_summary(ctx, result)
 
     if ctx.g.wants_json:
         ctx.emit_json(
@@ -52,11 +56,6 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
             }
         )
         return result
-
-    summary_path = case_dir / SUMMARY_FILE
-    summary_path.write_text(summary_text, encoding="utf-8")
-    result.case.metadata.options["summary"] = SUMMARY_FILE
-    result.case.write_metadata()
 
     console = ctx.console()
     ctx.banner(result.case.case.name)
@@ -86,6 +85,18 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
     console.print(f"  [cyan]{case_dir}[/cyan]")
     console.print(f"  summary: {SUMMARY_FILE}   metadata: metadata.json   data: *.ndjson")
     return result
+
+
+def write_summary(ctx: RunContext, result) -> Path:
+    """Write ``summary.txt`` into the case directory and record it in metadata.
+
+    Shared with ``badnet auto`` so both commands produce the same case layout.
+    """
+    summary_path = result.case_dir / SUMMARY_FILE
+    summary_path.write_text(_summary_text(ctx, result), encoding="utf-8")
+    result.case.metadata.options["summary"] = SUMMARY_FILE
+    result.case.write_metadata()
+    return summary_path
 
 
 def _summary_text(ctx: RunContext, result) -> str:

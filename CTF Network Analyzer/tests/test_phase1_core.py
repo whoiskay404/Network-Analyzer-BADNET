@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -9,7 +10,17 @@ import pytest
 from typer.testing import CliRunner
 
 from badnet import __version__
-from badnet.cli import app
+from badnet.cli import (
+    Globals,
+    app,
+    cmd_analyze,
+    cmd_auto,
+    cmd_config,
+    cmd_doctor,
+    cmd_info,
+    cmd_version,
+    with_globals,
+)
 
 runner = CliRunner()
 
@@ -49,6 +60,91 @@ def test_every_command_accepts_all_global_options(command: str) -> None:
         "--limit",
     ):
         assert flag in result.stdout, f"{command} is missing {flag}"
+
+
+def test_command_annotations_are_real_types_not_strings() -> None:
+    """`from __future__ import annotations` must not leak string annotations.
+
+    Typer matches annotations by identity/equality against concrete types.  If a
+    parameter reaches it as the string ``"Path"``, every command dies at import
+    time with ``RuntimeError: Type not yet supported: Path`` - which is exactly
+    what happened on Python 3.14 (PEP 649 lazy annotations).
+    """
+
+    @with_globals
+    def probe(globals: Globals, capture: Path | None = None, flag: bool = False) -> None:
+        return None
+
+    annotations = inspect.signature(probe).parameters
+    assert annotations["capture"].annotation == Path | None
+    assert annotations["flag"].annotation is bool
+    for name, param in annotations.items():
+        assert not isinstance(param.annotation, str), f"{name} leaked a string annotation"
+
+
+def test_every_registered_command_has_resolvable_annotations() -> None:
+    """No command may carry an unresolved string annotation into Typer."""
+    for command in (cmd_doctor, cmd_info, cmd_analyze, cmd_auto, cmd_config, cmd_version):
+        for name, param in inspect.signature(command).parameters.items():
+            assert not isinstance(param.annotation, str), f"{command.__name__}.{name}"
+
+
+def test_bad_flag_values_exit_with_usage_code(committed_sample: Path) -> None:
+    """A bad flag value is a usage error (exit 2), not a generic error (1).
+
+    Documented contract: 0 ok, 1 error, 2 bad flags/config, 3 missing dep.
+    """
+    for args in (
+        ["--max-packets", "0"],
+        ["--max-packets", "-5"],
+        ["--max-packets", "abc"],
+        ["--limit", "0"],
+        ["--limit", "abc"],
+    ):
+        result = runner.invoke(app, ["info", str(committed_sample), *args])
+        assert result.exit_code == 2, f"{args} -> exit {result.exit_code}, expected 2"
+
+
+def test_top_level_help_points_at_the_global_options() -> None:
+    """`badnet --help` must mention that global options exist and where they go.
+
+    They are registered per command, so without this pointer the top-level help
+    looks as if the only flag is --help.
+    """
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "Global options" in result.stdout
+    assert "--help" in result.stdout
+
+    # And every global option is documented on at least one command's help.
+    from badnet.cli import _global_options
+
+    info_help = runner.invoke(app, ["info", "--help"]).stdout
+    declared = set()
+    for option in (o for o, _ in _global_options().values()):
+        declared.update(p for p in getattr(option, "param_decls", ()) if p.startswith("--"))
+    missing = sorted(d for d in declared if d not in info_help)
+    assert not missing, f"undocumented in `info --help`: {missing}"
+
+
+def test_ascii_terminal_does_not_crash_on_unicode() -> None:
+    """Untrusted non-ASCII text must never abort output on an ASCII-only terminal.
+
+    `LANG=C` is still common on minimal installs and cron; capture paths and URIs
+    can contain characters such as e-acute or an emoji.
+    """
+    import io
+
+    from badnet.reporting.terminal import safe_stream
+
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+    try:
+        safe_stream(stream)
+        stream.write("caf\u00e9-\u4f60\u597d-\U0001f600.pcap\n")  # must not raise
+        stream.flush()
+        assert stream.buffer.getvalue()  # something was actually written
+    finally:
+        stream.detach()
 
 
 def test_version_command() -> None:

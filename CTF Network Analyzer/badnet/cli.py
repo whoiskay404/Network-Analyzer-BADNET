@@ -11,8 +11,8 @@ from __future__ import annotations
 import functools
 import inspect
 import json
-import os
 import sys
+import typing
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -20,7 +20,7 @@ import typer
 
 from badnet import TOOL_NAME, TOOL_TAGLINE, __version__
 from badnet.config import Config
-from badnet.errors import BadnetError, ExitCode
+from badnet.errors import BadnetError, ExitCode, UsageError
 from badnet.utils.logging import is_debug, setup_logging
 
 # --------------------------------------------------------------------------- app
@@ -31,6 +31,11 @@ app = typer.Typer(
         f"{TOOL_NAME} v{__version__} - {TOOL_TAGLINE}\n\n"
         "Passive network forensics for authorised CTFs and lab captures. "
         "Only analyse systems you own or have explicit permission to test."
+    ),
+    epilog=(
+        "Global options: these are accepted by every command and go AFTER the "
+        "subcommand, e.g. `badnet info --json capture.pcap`. Run "
+        "`badnet <command> --help` for the full list."
     ),
     add_completion=False,
     no_args_is_help=True,
@@ -110,10 +115,29 @@ def with_globals(fn):
     set by construction.
     """
     original = inspect.signature(fn)
-    new_params = [p for n, p in original.parameters.items() if n != "globals"]
+
+    # ``from __future__ import annotations`` leaves every annotation as a string,
+    # e.g. ``capture`` is literally annotated ``"Path"``.  Typer normally
+    # resolves those through ``inspect.signature(..., eval_str=True)``, but on
+    # Python 3.14 (PEP 649 lazy annotations) the string can reach Typer
+    # unresolved, and it rejects it with "Type not yet supported: Path" before
+    # any command runs.  Resolve them to real objects here so no downstream
+    # version-specific string evaluation is needed.
+    try:
+        resolved_hints = typing.get_type_hints(fn)
+    except NameError:  # pragma: no cover - defensive, keeps registration working
+        resolved_hints = {}
+
+    new_params: list[inspect.Parameter] = []
+    annotations: dict[str, Any] = {}
+    for name, param in original.parameters.items():
+        if name == "globals":
+            continue
+        annotation = resolved_hints.get(name, param.annotation)
+        new_params.append(param.replace(annotation=annotation))
+        annotations[name] = annotation
 
     options = _global_options()
-    annotations: dict[str, Any] = dict(getattr(fn, "__annotations__", {}))
     for name, (option, annotation) in options.items():
         new_params.append(
             inspect.Parameter(
@@ -164,14 +188,19 @@ class Globals:
             try:
                 self.max_packets = int(self.max_packets)
             except (TypeError, ValueError):
-                raise BadnetError("--max-packets must be a whole number") from None
+                raise UsageError("--max-packets must be a whole number") from None
             if self.max_packets < 1:
-                raise BadnetError("--max-packets must be at least 1")
+                raise UsageError(
+                    "--max-packets must be at least 1",
+                    hint="use --max-packets 1000 to sample the first 1000 packets",
+                )
         if self.limit is not None:
             try:
                 self.limit = int(self.limit)
             except (TypeError, ValueError):
-                raise BadnetError("--limit must be a whole number") from None
+                raise UsageError("--limit must be a whole number") from None
+            if self.limit < 1:
+                raise UsageError("--limit must be at least 1")
         self.output_dir = Path(self.output_dir).expanduser() if self.output_dir else None
         self.config = Path(self.config).expanduser() if self.config else None
 
@@ -253,7 +282,7 @@ class RunContext:
 
     def banner(self, subtitle: str = "") -> None:
         """Print the banner unless suppressed."""
-        if self.g.show_banner:
+        if self.g.show_banner and self.config.output.include_banner:
             from badnet.reporting.terminal import print_banner
 
             print_banner(self.console(), subtitle=subtitle)
@@ -273,9 +302,9 @@ def _json_default(value: Any) -> Any:
 
 def fail(message: str, *, hint: str = "", code: ExitCode = ExitCode.ERROR) -> NoReturn:
     """Print a clean error and exit with the documented code."""
-    from rich.console import Console
+    from badnet.reporting.terminal import make_error_console
 
-    console = Console(stderr=True, no_color=os.environ.get("NO_COLOR") is not None)
+    console = make_error_console()
     console.print(f"[bold red]error:[/bold red] {message}", highlight=False)
     if hint:
         console.print(f"[dim]hint: {hint}[/dim]", highlight=False)
@@ -294,9 +323,9 @@ def handle_errors(fn):
         try:
             return fn(*args, **kwargs)
         except BadnetError as exc:
-            from rich.console import Console
+            from badnet.reporting.terminal import make_error_console
 
-            console = Console(stderr=True)
+            console = make_error_console()
             console.print(f"[bold red]error:[/bold red] {exc.message}", highlight=False)
             if exc.hint:
                 console.print(f"[dim]hint: {exc.hint}[/dim]", highlight=False)
@@ -306,9 +335,9 @@ def handle_errors(fn):
                 traceback.print_exc()
             raise typer.Exit(code=int(exc.exit_code)) from None
         except KeyboardInterrupt:
-            from rich.console import Console
+            from badnet.reporting.terminal import make_error_console
 
-            Console(stderr=True).print(
+            make_error_console().print(
                 "[yellow]interrupted[/yellow] - partial results were kept; "
                 "the case is marked incomplete"
             )
