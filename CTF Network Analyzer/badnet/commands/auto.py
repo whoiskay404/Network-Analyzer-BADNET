@@ -86,6 +86,9 @@ def run(ctx: RunContext, capture: Path, *, ctf: bool = True) -> object:
                     "connections": len(result.connections),
                     "streams": len(result.streams),
                     "dns_queries": getattr(result.dns_stats, "queries", 0),
+                    "payload_findings": sum(
+                        1 for f in result.findings if str(f.detector).startswith("payload")
+                    ),
                     "artifacts": len(result.artifacts),
                     "findings": len(findings),
                 },
@@ -116,6 +119,9 @@ def _narrative(ctx: RunContext, result) -> dict[str, object]:
         "streams": len(result.streams),
         "http_requests": getattr(result.http_stats, "requests", 0),
         "dns_queries": getattr(result.dns_stats, "queries", 0),
+        "payload_findings": sum(
+            1 for f in result.findings if str(f.detector).startswith("payload")
+        ),
         "files": len(result.artifacts),
         "hashes": len([a for a in result.artifacts if a.sha256]),
         "reader": result.ctx.reader,
@@ -136,6 +142,7 @@ def _print_summary(console, ctx: RunContext, result, summary: dict) -> None:
                 ("TCP streams", summary.get("streams")),
                 ("HTTP requests", summary.get("http_requests")),
                 ("DNS queries", summary.get("dns_queries")),
+                ("Payload hits", summary.get("payload_findings")),
                 ("files recovered", summary.get("files")),
                 ("hashed artifacts", summary.get("hashes")),
                 ("reader", summary.get("reader")),

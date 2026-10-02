@@ -26,7 +26,8 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
             max_packets=ctx.g.max_packets,
             progress=bar,
             on_case_created=ctx.log_callback(),
-            phases=phases or ("info", "protocols", "connections", "streams", "http", "dns"),
+            phases=phases
+            or ("info", "protocols", "connections", "streams", "http", "dns", "payload"),
         )
         bar.update(description="done", msg="")
 
@@ -49,6 +50,7 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
                     "streams": len(result.streams),
                     "http_requests": getattr(result.http_stats, "requests", 0),
                     "dns_queries": getattr(result.dns_stats, "queries", 0),
+                    "payload_findings": _payload_findings(result.findings),
                     "artifacts": len(result.artifacts),
                     "findings": len(result.findings),
                 },
@@ -73,6 +75,7 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
                 ("streams", len(result.streams)),
                 ("HTTP requests", getattr(result.http_stats, "requests", 0)),
                 ("DNS queries", getattr(result.dns_stats, "queries", 0)),
+                ("Payload hits", _payload_findings(result.findings)),
                 ("artifacts", len(result.artifacts)),
                 ("findings", len(result.findings)),
                 ("reader", result.ctx.reader),
@@ -121,6 +124,7 @@ def _summary_text(ctx: RunContext, result) -> str:
         f"{getattr(result.http_stats, 'responses', 0)} response(s)",
         f"dns         : {getattr(result.dns_stats, 'queries', 0)} query(ies), "
         f"{getattr(result.dns_stats, 'responses', 0)} response(s)",
+        f"payload     : {_payload_findings(result.findings)} finding(s) from the raw-byte sweep",
         f"artifacts   : {len(result.artifacts)}",
         f"findings    : {len(result.findings)}",
     ]
@@ -133,3 +137,8 @@ def _summary_text(ctx: RunContext, result) -> str:
         lines.append("degraded features:")
         lines.extend(f"  - {d}" for d in result.ctx.degraded)
     return "\n".join(lines) + "\n"
+
+
+def _payload_findings(findings) -> int:
+    """Count findings raised by the generic payload sweep (incl. decoded ones)."""
+    return sum(1 for f in findings if str(f.detector).startswith("payload"))

@@ -286,6 +286,125 @@ def read_segments(
     return _read_segments_scapy(ctx, stream_id, max_bytes=max_bytes)
 
 
+def read_stream_segments_bulk(
+    ctx: PipelineContext,
+    *,
+    max_bytes_per_stream: int = 32 * 1024 * 1024,
+    max_total_bytes: int = 256 * 1024 * 1024,
+) -> dict[int, list[SegmentRecord]]:
+    """Read every TCP stream's segments in a single pass.
+
+    :func:`read_segments` spawns one reader process per stream, which does not
+    scale to sweeping hundreds of streams.  This reads the whole capture once and
+    groups segments by ``tcp.stream`` instead.  Both bounds protect memory.
+    """
+    if ctx.has_tshark():
+        return _bulk_segments_tshark(
+            ctx, max_bytes_per_stream=max_bytes_per_stream, max_total_bytes=max_total_bytes
+        )
+    return _bulk_segments_scapy(
+        ctx, max_bytes_per_stream=max_bytes_per_stream, max_total_bytes=max_total_bytes
+    )
+
+
+def _bulk_segments_tshark(
+    ctx: PipelineContext, *, max_bytes_per_stream: int, max_total_bytes: int
+) -> dict[int, list[SegmentRecord]]:
+    assert ctx.tshark_info is not None
+    idx = {name: i for i, name in enumerate(STREAM_FIELDS)}
+
+    def get(row: list[str], name: str) -> str:
+        i = idx[name]
+        return row[i] if i < len(row) else ""
+
+    out: dict[int, list[SegmentRecord]] = {}
+    totals: dict[int, int] = {}
+    grand = 0
+    try:
+        for row in ctx.packet_rows(fields=STREAM_FIELDS):
+            stream_id = _int(get(row, "tcp.stream"))
+            if stream_id is None:
+                continue
+            seq = _int(get(row, "tcp.seq_raw"))
+            if seq is None:
+                continue
+            payload = tshark.decode_hex_field(get(row, "tcp.payload"))
+            if not payload:
+                continue
+            if totals.get(stream_id, 0) + len(payload) > max_bytes_per_stream:
+                continue
+            if grand + len(payload) > max_total_bytes:
+                ctx.warn(
+                    "payload sweep reached its total byte budget; later streams were not reassembled"
+                )
+                break
+            totals[stream_id] = totals.get(stream_id, 0) + len(payload)
+            grand += len(payload)
+            out.setdefault(stream_id, []).append(
+                SegmentRecord(
+                    packet_no=_int(get(row, "frame.number")) or 0,
+                    ts=_float(get(row, "frame.time_epoch")) or 0.0,
+                    src=get(row, "ip.src") or get(row, "ipv6.src"),
+                    src_port=_int(get(row, "tcp.srcport")) or 0,
+                    dst=get(row, "ip.dst") or get(row, "ipv6.dst"),
+                    dst_port=_int(get(row, "tcp.dstport")) or 0,
+                    seq_raw=seq,
+                    payload=payload,
+                    flags=get(row, "tcp.flags"),
+                    retransmission=bool(get(row, "tcp.analysis.retransmission")),
+                    out_of_order=bool(get(row, "tcp.analysis.out_of_order")),
+                )
+            )
+    except ToolError as exc:
+        ctx.warn(f"tshark bulk stream read failed: {exc}")
+        return {}
+    return out
+
+
+def _bulk_segments_scapy(
+    ctx: PipelineContext, *, max_bytes_per_stream: int, max_total_bytes: int
+) -> dict[int, list[SegmentRecord]]:
+    out: dict[int, list[SegmentRecord]] = {}
+    totals: dict[int, int] = {}
+    grand = 0
+    for packet in ctx.iter_packets():
+        stream_id = packet.tcp_stream
+        if stream_id is None:
+            continue
+        payload_hex = packet.payload_hex or ""
+        if not payload_hex:
+            continue
+        try:
+            payload = bytes.fromhex(payload_hex)
+        except ValueError:
+            continue
+        if not payload:
+            continue
+        if totals.get(stream_id, 0) + len(payload) > max_bytes_per_stream:
+            continue
+        if grand + len(payload) > max_total_bytes:
+            ctx.warn(
+                "payload sweep reached its total byte budget; later streams were not reassembled"
+            )
+            break
+        totals[stream_id] = totals.get(stream_id, 0) + len(payload)
+        grand += len(payload)
+        out.setdefault(stream_id, []).append(
+            SegmentRecord(
+                packet_no=packet.number,
+                ts=packet.ts,
+                src=packet.src or "",
+                src_port=packet.src_port or 0,
+                dst=packet.dst or "",
+                dst_port=packet.dst_port or 0,
+                seq_raw=packet.tcp_seq or 0,
+                payload=payload,
+                flags=packet.tcp_flags or "",
+            )
+        )
+    return out
+
+
 def _read_segments_tshark(
     ctx: PipelineContext, stream_id: int, *, max_bytes: int
 ) -> list[SegmentRecord]:
@@ -555,6 +674,33 @@ def reassemble_stream(
             f"stream {stream_id} has no reassemblable TCP payload in this capture",
             hint="run 'badnet stream <capture>' to list the streams that do have payload",
         )
+    return reassemble_from_segments(
+        segments, stream_id, max_bytes=cap, client=client, server=server
+    )
+
+
+def reassemble_from_segments(
+    segments: list[SegmentRecord],
+    stream_id: int,
+    *,
+    max_bytes: int,
+    client: tuple[str, int, str, int] | None = None,
+    server: tuple[str, int, str, int] | None = None,
+) -> StreamData:
+    """Reassemble both directions from already-read *segments*.
+
+    Split out from :func:`reassemble_stream` so a whole-capture sweep can read
+    every stream's segments once and then reassemble each one without spawning a
+    reader process per stream.  *client*/*server* are the directions learned from
+    the connection tracker; when absent the observed data decides the orientation.
+
+    Raises
+    ------
+    AnalysisError
+        When *segments* is empty.
+    """
+    if not segments:
+        raise AnalysisError(f"stream {stream_id} has no reassemblable TCP payload")
 
     # Split into the two directions and reassemble each independently.
     by_dir: dict[tuple[str, int, str, int], list[SegmentRecord]] = {}
@@ -566,8 +712,8 @@ def reassemble_stream(
     client_key = client if client in by_dir else _client_direction(segments)
     server_key = server if server in by_dir else next((k for k in by_dir if k != client_key), None)
 
-    c2s = reassemble(segments, stream_id=stream_id, max_bytes=cap, direction=client_key)
-    s2c = reassemble(segments, stream_id=stream_id, max_bytes=cap, direction=server_key)
+    c2s = reassemble(segments, stream_id=stream_id, max_bytes=max_bytes, direction=client_key)
+    s2c = reassemble(segments, stream_id=stream_id, max_bytes=max_bytes, direction=server_key)
 
     return StreamData(
         stream_id=stream_id,

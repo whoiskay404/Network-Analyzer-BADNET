@@ -4,7 +4,8 @@
 
 Point BADNET at a `.pcap` or `.pcapng` and it tells you what is inside: hosts,
 conversations, streams, HTTP and DNS traffic, carved files, and ranked CTF
-findings — with every claim explained rather than asserted.
+findings — including flags hidden inside encoded payloads on any port. Every
+claim is explained rather than asserted.
 
 > **Authorised targets only.** Analyse systems you own or have explicit written
 > permission to test. BADNET is a passive reader; it never sends traffic, but the
@@ -64,6 +65,7 @@ nothing is uploaded anywhere.
 | TCP streams | stream table plus two-way reassembly with correct orientation |
 | HTTP | request/response extraction, bounded bodies, gzip/deflate and chunked decoding |
 | DNS | wire-level parsing of A/AAAA/CNAME/NS/PTR/MX/TXT; tunnelling/exfiltration heuristics |
+| Payload sweep | re-scans every TCP direction and UDP/ICMP datagram; decodes base64/base64url/hex/URL/ROT13 to recover wrapped flags |
 | Findings | YAML signature set (flags, credentials, secrets, endpoints) + explained heuristics |
 | Search | regex or literal sweep across reassembled TCP **and** UDP/ICMP datagrams |
 | Carving | magic-byte file recovery from streams, with hashes |
@@ -250,9 +252,11 @@ elapsed      3.6s
   output/capture-516a10a3
 ```
 
-Default phases: `info`, `protocols`, `connections`, `streams`, `http`, `dns`.
-This is the command to reach for when you want the raw data on disk without the
-ranked presentation of `auto`.
+Default phases: `info`, `protocols`, `connections`, `streams`, `http`, `dns`,
+`payload`. The `payload` phase sweeps every reassembled TCP stream direction and
+every UDP/ICMP datagram, so flags are found wherever they travel - not only over
+HTTP and DNS. This is the command to reach for when you want the raw data on disk
+without the ranked presentation of `auto`.
 
 ### `badnet auto`
 
@@ -266,6 +270,7 @@ $ badnet auto capture.pcap
 ```
 --------------------------------- CTF FINDINGS  (25) --------------------------
 [!]  flag        Possible CTF flag (brace form)  high    flag{unit_testing_is_great}
+[!]  flag        Possible CTF flag (brace form)  high    flag{b64_in_http_post_wins}
 [~]  flag        Possible CTF flag (prefixed)    medium  ctf-challenge
 [!]  dns         Possible DNS tunnelling         high    60/60 queries ...
 
@@ -274,6 +279,13 @@ $ badnet auto capture.pcap
     why: A token with the classic flag/ctf naming and a brace-delimited body.
     evidence: flag{unit_testing_is_great}
     source: stream 0 response 200
+
+  Possible CTF flag (brace form)  (flag/high, confidence high, detector
+      payload.base64:flag_brace)
+    why: A base64 blob in the stream decoded to a token with the classic
+         flag/ctf naming.
+    evidence: flag{b64_in_http_post_wins}
+    source: tcp-stream-0 client_to_server [base64]
 ```
 
 By default (`--ctf`) findings are ranked: **flags → credentials → secrets →
@@ -485,13 +497,19 @@ entry in `metadata.json`; earlier evidence is never removed.
 
 ## Detection engine
 
-Findings come from two sources, both bounded so a hostile capture cannot flood
+Findings come from three sources, all bounded so a hostile capture cannot flood
 you:
 
 1. **Signatures** — YAML patterns compiled up front. The shipped set has **52
    patterns** in six categories: `secret` (20), `credential` (15), `metadata`
    (6), `endpoint` (5), `flag` (4), `encoding` (2).
 2. **Explained heuristics** — protocol-aware rules such as DNS tunnelling.
+3. **Decoding pass** — the `payload` phase tries base64, base64url, hex, URL
+   percent-encoding and ROT13 (including nested combinations) on TCP payloads
+   and UDP/ICMP datagrams, then re-scans the decoded text for flag-shaped
+   matches. So a flag that only ever appears base64-wrapped in a body is still
+   recovered. Recursion is capped by `limits.max_decode_depth` and each blob by
+   `limits.max_decode_size`.
 
 Every finding carries a **category**, a **severity** (`info`/`low`/`medium`/
 `high`), a **confidence** (`low`/`medium`/`high`), a plain-English **explanation**
@@ -641,9 +659,11 @@ automatic multi-file artifact extraction. The `tls/`, `hashes/` and `nmap/` case
 subdirectories are created but stay empty until those land, and `artifacts`
 stays `0` for the built-in `auto`/`analyze` path (use `stream --carve` today).
 
-**By design:** BADNET will not hand you a flag that only exists in encrypted or
-nested-encoded form. It flags the encoding and surfaces the bytes so you can
-decode them; it does not guess.
+**By design:** BADNET will not decrypt TLS or open a password-protected archive
+without the key - no tool can, absent the secret. It *does* automatically peel
+common encodings (base64, base64url, hex, URL, ROT13, and nested combinations up
+to `limits.max_decode_depth`). Encodings and compression it cannot or will not
+decode are still flagged and their bytes surfaced so you can take over.
 
 ---
 
@@ -654,13 +674,13 @@ $ source .venv/bin/activate
 $ pip install -e ".[dev]"
 
 $ pytest -q
-157 passed
+168 passed
 
 $ ruff check .
 All checks passed!
 
 $ ruff format --check .
-69 files already formatted
+73 files already formatted
 ```
 
 Tests run the real pipeline against a freshly generated synthetic capture, so a

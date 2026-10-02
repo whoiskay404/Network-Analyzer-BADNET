@@ -13,6 +13,7 @@ from pathlib import Path
 
 from badnet.analyzers import dns as dns_analyzer
 from badnet.analyzers import http as http_analyzer
+from badnet.analyzers import payload as payload_analyzer
 from badnet.analyzers import pcap as pcap_analyzer
 from badnet.analyzers import protocols as protocols_analyzer
 from badnet.analyzers import tcp as tcp_analyzer
@@ -20,6 +21,7 @@ from badnet.analyzers.pipeline import PipelineContext, validate_input
 from badnet.config import Config
 from badnet.detectors import dns as dns_detector
 from badnet.detectors import http as http_detector
+from badnet.detectors import payload as payload_detector
 from badnet.models.finding import Finding
 from badnet.models.pcapinfo import PcapInfo
 from badnet.signatures import load_signatures
@@ -73,6 +75,7 @@ def run_case(
         "streams",
         "dns",
         "http",
+        "payload",
         "tls",
         "files",
     ),
@@ -218,6 +221,14 @@ def _run_phases(
     if "dns" in phases:
         _run_dns(result, store)
 
+    # --------------------------------------------------------- phase: payload
+    # Runs last so the richer HTTP/DNS detections win the cross-phase dedupe;
+    # this sweep is the backstop that catches flags in FTP, raw TCP, custom
+    # protocols and non-DNS UDP/ICMP.
+    _record(result, "payload")
+    if "payload" in phases:
+        _run_payload(result, store, streams)
+
     # --------------------------------------------- reserved (not built yet)
     # ``tls``/``files`` are named in the data model but have no analyzer yet.
     # Log it so a run that requested them is not silently short of evidence;
@@ -254,12 +265,9 @@ def _run_http(result: CaseResult, store: CaseStore, streams) -> None:
         config=ctx.config,
         signatures=signatures,
     )
-    result.findings = findings
-    if findings:
-        with store.dataset("findings") as writer:
-            writer.write_many(findings)
+    _add_findings(result, store, findings)
     store.metadata.options["http"] = analysis.stats.to_dict()
-    store.metadata.options["findings_count"] = len(findings)
+    store.metadata.options["findings_count"] = len(result.findings)
     log.info(
         "http: %d exchange(s), %d finding(s) from %d http stream(s)",
         len(analysis.exchanges),
@@ -290,10 +298,7 @@ def _run_dns(result: CaseResult, store: CaseStore) -> None:
         signatures=signatures,
         tunnels=analysis.tunnels,
     )
-    result.findings = list(result.findings) + findings
-    if findings:
-        with store.dataset("findings") as writer:
-            writer.write_many(findings)
+    _add_findings(result, store, findings)
 
     store.metadata.options["dns"] = analysis.stats.to_dict()
     if analysis.tunnels:
@@ -308,6 +313,45 @@ def _run_dns(result: CaseResult, store: CaseStore) -> None:
         len(findings),
         len(analysis.tunnels),
     )
+
+
+def _run_payload(result: CaseResult, store: CaseStore, streams) -> None:
+    """Signature-scan every TCP stream direction and datagram, decoding encodings.
+
+    This is the generic backstop: unlike the HTTP and DNS phases it assumes
+    nothing about the protocol, so a flag in an FTP transfer, a raw TCP stream or
+    a custom UDP flow is still found.  Findings already raised by an earlier,
+    richer detector are dropped by :func:`_add_findings`.
+    """
+    ctx = result.ctx
+    blobs = payload_analyzer.sweep(ctx, streams)
+    signatures = load_signatures(ctx.config.effective_signature_dir)
+    findings = payload_detector.detect(blobs, config=ctx.config, signatures=signatures)
+    fresh = _add_findings(result, store, findings)
+
+    store.metadata.options["payload"] = {"blobs": len(blobs), "findings": len(fresh)}
+    store.metadata.options["findings_count"] = len(result.findings)
+    log.info(
+        "payload: %d blob(s) scanned, %d new finding(s)",
+        len(blobs),
+        len(fresh),
+    )
+
+
+def _add_findings(result: CaseResult, store: CaseStore, findings: list[Finding]) -> list[Finding]:
+    """Append findings, dropping any whose id a previous phase already reported.
+
+    Findings are deduplicated case-wide by their deterministic id, so the generic
+    payload sweep never duplicates the HTTP or DNS detectors' output.
+    """
+    seen = {finding.id for finding in result.findings}
+    fresh = [finding for finding in findings if finding.id not in seen]
+    if not fresh:
+        return []
+    result.findings.extend(fresh)
+    with store.dataset("findings") as writer:
+        writer.write_many(fresh)
+    return fresh
 
 
 def _record(result: CaseResult, phase: str) -> None:
