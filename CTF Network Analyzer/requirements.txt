@@ -1,0 +1,19 @@
+# BADNET runtime requirements.
+# Install with:  pip install -e .        (preferred)
+# or:            pip install -r requirements.txt
+#
+# Kali note: system Python is externally managed (PEP 668), so create a venv:
+#   python3 -m venv .venv && source .venv/bin/activate
+#   pip install -e .
+
+typer>=0.12
+rich>=13.7
+scapy>=2.5
+PyYAML>=6.0
+Jinja2>=3.1
+cryptography>=42.0
+
+# Optional: libmagic bindings. BADNET detects libmagic at runtime and falls back to
+# the `file(1)` binary and then to its own built-in magic-byte table, so this is
+# not required.  On Kali:  sudo apt install libmagic1 python3-magic
+python-magic>=0.4.27 ; platform_system != "Windows"

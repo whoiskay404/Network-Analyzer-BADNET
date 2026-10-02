@@ -1,0 +1,154 @@
+# Ports and services BADNET highlights.
+#
+# IMPORTANT: an unusual port is not evidence of malicious activity.  In most
+# CTFs and lab captures the interesting service is deliberately moved off its
+# standard port - that is the *only* reason this list exists.  Terminal output
+# that highlights these ports always says so in words.
+#
+# `services` maps ports to the service name BADNET assumes for display purposes
+# when tshark does not know better; `interesting` is the highlight list.
+
+version: 1
+
+interesting:
+  - 21
+  - 22
+  - 23
+  - 25
+  - 53
+  - 80
+  - 110
+  - 139
+  - 143
+  - 443
+  - 445
+  - 3306
+  - 3389
+  - 5000
+  - 8000
+  - 8080
+  - 8443
+
+# Extra ports common in lab/CTF setups; add your own freely.
+also_noteworthy:
+  - 21
+  - 22
+  - 23
+  - 25
+  - 53
+  - 69
+  - 110
+  - 123
+  - 137
+  - 139
+  - 143
+  - 161
+  - 389
+  - 445
+  - 636
+  - 993
+  - 995
+  - 1433
+  - 1521
+  - 2049
+  - 2375
+  - 3000
+  - 3306
+  - 3389
+  - 4000
+  - 4444
+  - 5000
+  - 5432
+  - 5555
+  - 5900
+  - 6379
+  - 8000
+  - 8080
+  - 8443
+  - 8888
+  - 9000
+  - 9090
+  - 9200
+  - 11211
+  - 27017
+
+services:
+  20: "ftp-data"
+  21: "ftp"
+  22: "ssh"
+  23: "telnet"
+  25: "smtp"
+  53: "dns"
+  67: "dhcp"
+  68: "dhcp"
+  69: "tftp"
+  80: "http"
+  110: "pop3"
+  119: "nntp"
+  123: "ntp"
+  135: "msrpc"
+  137: "netbios-ns"
+  138: "netbios-dgm"
+  139: "netbios-ssn"
+  143: "imap"
+  161: "snmp"
+  389: "ldap"
+  443: "https"
+  445: "smb"
+  465: "smtps"
+  514: "syslog"
+  587: "submission"
+  636: "ldaps"
+  873: "rsync"
+  993: "imaps"
+  995: "pop3s"
+  1080: "socks"
+  1433: "mssql"
+  1521: "oracle"
+  2049: "nfs"
+  2375: "docker-api"
+  3128: "squid"
+  3306: "mysql"
+  3389: "rdp"
+  4444: "metasploit-default"
+  5000: "upnp-http"
+  5432: "postgres"
+  5900: "vnc"
+  6379: "redis"
+  8000: "http-alt"
+  8080: "http-proxy"
+  8443: "https-alt"
+  8888: "http-alt"
+  9000: "php-fpm"
+  9090: "prometheus"
+  9200: "elasticsearch"
+  11211: "memcached"
+  27017: "mongodb"
+
+# Application protocols BADNET tries to decode when tshark is unavailable.
+# This list is used by the Scapy fallback reader only.
+known_app_protocols:
+  - http
+  - https
+  - tls
+  - ssl
+  - dns
+  - ftp
+  - ftp-data
+  - smtp
+  - pop3
+  - imap
+  - telnet
+  - ssh
+  - smb
+  - nfs
+  - tftp
+  - dhcp
+  - snmp
+  - syslog
+  - rdp
+  - mysql
+  - postgres
+  - redis
+  - smtp
+  - irc

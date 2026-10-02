@@ -1,0 +1,2 @@
+[console_scripts]
+badnet = badnet.cli:run
