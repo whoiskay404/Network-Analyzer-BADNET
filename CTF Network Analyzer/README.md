@@ -312,15 +312,18 @@ connection table, TCP stream table, TCP reassembly in both directions with
 correct client/server orientation, YAML signature loading (52 patterns),
 `doctor`, append-only case storage, stream dumping and magic-byte carving
 (`stream`), regex/literal search across reassembled payload (`search`), a
-self-contained offline `report.html` (`report`), and an HTTP/1.x parser over
+self-contained offline `report.html` (`report`), an HTTP/1.x parser over
 reassembled streams with an HTTP detector — flags, credentials, `Authorization`
 headers, secrets, endpoints and file extensions — that populates
-`findings.ndjson`, with bounded body previews, gzip/deflate and chunked decoding.
+`findings.ndjson`, with bounded body previews, gzip/deflate and chunked decoding,
+and a DNS analyzer that parses port-53 payloads at the wire level (A/AAAA/CNAME/
+NS/PTR/MX/TXT), scans names and TXT values with the signatures, and flags
+possible tunnelling/exfiltration as an explained `dns` finding.
 
-**Not yet:** the `dns` and `tls` analyzers, automatic artifact extraction, and the
-DNS/TLS detector rules. `analyze` and `auto` now report real HTTP request and
-finding counts, while `artifacts` stays `0` and the `dns/`, `tls/`, `hashes/` and
-`nmap/` case subdirectories are created but stay empty until those land.
+**Not yet:** the `tls` analyzer, automatic artifact extraction, and the TLS
+detector rules. `analyze` and `auto` now report real HTTP and DNS counts, while
+`artifacts` stays `0` and the `tls/`, `hashes/` and `nmap/` case subdirectories
+are created but stay empty until those land.
 
 Every follow-up `auto` prints is runnable as-is; it only points at commands and
 files that exist.
@@ -410,13 +413,13 @@ $ source .venv/bin/activate
 $ pip install -e ".[dev]"
 
 $ pytest -q
-137 passed
+157 passed
 
 $ ruff check .
 All checks passed!
 
 $ ruff format --check .
-66 files already formatted
+69 files already formatted
 ```
 
 Tests run the real pipeline against a freshly generated capture, so a tshark

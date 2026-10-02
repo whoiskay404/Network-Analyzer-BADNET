@@ -26,7 +26,7 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
             max_packets=ctx.g.max_packets,
             progress=bar,
             on_case_created=ctx.log_callback(),
-            phases=phases or ("info", "protocols", "connections", "streams", "http"),
+            phases=phases or ("info", "protocols", "connections", "streams", "http", "dns"),
         )
         bar.update(description="done", msg="")
 
@@ -48,6 +48,7 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
                     "connections": len(result.connections),
                     "streams": len(result.streams),
                     "http_requests": getattr(result.http_stats, "requests", 0),
+                    "dns_queries": getattr(result.dns_stats, "queries", 0),
                     "artifacts": len(result.artifacts),
                     "findings": len(result.findings),
                 },
@@ -71,6 +72,7 @@ def run(ctx: RunContext, capture: Path, *, phases: tuple[str, ...] | None = None
                 ("connections", len(result.connections)),
                 ("streams", len(result.streams)),
                 ("HTTP requests", getattr(result.http_stats, "requests", 0)),
+                ("DNS queries", getattr(result.dns_stats, "queries", 0)),
                 ("artifacts", len(result.artifacts)),
                 ("findings", len(result.findings)),
                 ("reader", result.ctx.reader),
@@ -117,6 +119,8 @@ def _summary_text(ctx: RunContext, result) -> str:
         f"streams     : {len(result.streams)}",
         f"http        : {getattr(result.http_stats, 'requests', 0)} request(s), "
         f"{getattr(result.http_stats, 'responses', 0)} response(s)",
+        f"dns         : {getattr(result.dns_stats, 'queries', 0)} query(ies), "
+        f"{getattr(result.dns_stats, 'responses', 0)} response(s)",
         f"artifacts   : {len(result.artifacts)}",
         f"findings    : {len(result.findings)}",
     ]

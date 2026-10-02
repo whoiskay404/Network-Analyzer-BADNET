@@ -63,6 +63,7 @@ FIELDS: tuple[str, ...] = (
     "udp.srcport",
     "udp.dstport",
     "udp.length",
+    "udp.payload",
     "icmp.type",
     # DNS
     "dns.id",
@@ -381,10 +382,10 @@ def packet_from_row(row: list[str]) -> NormalizedPacket | None:
         )
         src_port = dst_port = None
 
-    payload = get("data.data") or ""
-    if not payload:
-        http_data = get("http.file_data")
-        payload = http_data if http_data else ""
+    # ``data.data`` is the payload tshark could not dissect further; for a fully
+    # dissected protocol (DNS, for instance) it is empty and ``udp.payload`` /
+    # ``http.file_data`` carry the actual bytes instead.
+    payload = get("data.data") or get("udp.payload") or get("http.file_data") or ""
 
     malformed = False
     malformed_reason = None

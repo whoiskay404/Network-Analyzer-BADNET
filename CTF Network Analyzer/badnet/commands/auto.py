@@ -1,7 +1,7 @@
 """``badnet auto`` - summary first, then ranked CTF findings and follow-ups.
 
-The HTTP detector phase is wired; correlation and artifact extraction are still
-to come.  This module is the presentation contract: a short narrative summary,
+The HTTP and DNS detector phases are wired; correlation and artifact extraction
+are still to come.  This module is the presentation contract: a summary,
 a ranked findings table where every row explains itself, and concrete next
 commands.
 """
@@ -85,6 +85,7 @@ def run(ctx: RunContext, capture: Path, *, ctf: bool = True) -> object:
                 "counts": {
                     "connections": len(result.connections),
                     "streams": len(result.streams),
+                    "dns_queries": getattr(result.dns_stats, "queries", 0),
                     "artifacts": len(result.artifacts),
                     "findings": len(findings),
                 },
@@ -114,6 +115,7 @@ def _narrative(ctx: RunContext, result) -> dict[str, object]:
         "connections": len(result.connections),
         "streams": len(result.streams),
         "http_requests": getattr(result.http_stats, "requests", 0),
+        "dns_queries": getattr(result.dns_stats, "queries", 0),
         "files": len(result.artifacts),
         "hashes": len([a for a in result.artifacts if a.sha256]),
         "reader": result.ctx.reader,
@@ -133,6 +135,7 @@ def _print_summary(console, ctx: RunContext, result, summary: dict) -> None:
                 ("connections", summary.get("connections")),
                 ("TCP streams", summary.get("streams")),
                 ("HTTP requests", summary.get("http_requests")),
+                ("DNS queries", summary.get("dns_queries")),
                 ("files recovered", summary.get("files")),
                 ("hashed artifacts", summary.get("hashes")),
                 ("reader", summary.get("reader")),
@@ -252,6 +255,10 @@ def _print_followups(console, ctx: RunContext, result, findings: list[Finding]) 
     http_file = case_dir / "http" / "http.ndjson"
     if http_file.is_file():
         lines.append(f"less {http_file}   # parsed HTTP exchanges (headers + bodies)")
+
+    dns_file = case_dir / "dns" / "dns.ndjson"
+    if dns_file.is_file():
+        lines.append(f"less {dns_file}   # parsed DNS messages (queries, answers, TXT)")
 
     if any(f.category == "flag" for f in findings):
         lines.append(f"grep -ri 'flag' {case_dir}   # confirm recovered flags")

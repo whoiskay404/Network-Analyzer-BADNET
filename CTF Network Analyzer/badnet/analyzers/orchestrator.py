@@ -11,12 +11,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from badnet.analyzers import dns as dns_analyzer
 from badnet.analyzers import http as http_analyzer
 from badnet.analyzers import pcap as pcap_analyzer
 from badnet.analyzers import protocols as protocols_analyzer
 from badnet.analyzers import tcp as tcp_analyzer
 from badnet.analyzers.pipeline import PipelineContext, validate_input
 from badnet.config import Config
+from badnet.detectors import dns as dns_detector
 from badnet.detectors import http as http_detector
 from badnet.models.finding import Finding
 from badnet.models.pcapinfo import PcapInfo
@@ -80,9 +82,9 @@ def run_case(
     Parameters
     ----------
     phases:
-        Subset of the pipeline to run.  ``http`` is implemented; ``dns``/``tls``/
-        ``files`` are implemented in later phases of the build and are skipped
-        with a log message when they are not registered yet.
+        Subset of the pipeline to run.  ``http`` and ``dns`` are implemented;
+        ``tls``/``files`` are implemented in later phases of the build and are
+        skipped with a log message when they are not registered yet.
     on_case_created:
         Called with the case :class:`~pathlib.Path` as soon as the directory
         exists, before any analysis runs.  The CLI uses this to attach a log
@@ -209,11 +211,18 @@ def _run_phases(
     if "http" in phases:
         _run_http(result, store, streams)
 
+    # ------------------------------------------------------------- phase: dns
+    # Runs after HTTP so DNS findings extend ``result.findings`` rather than
+    # being overwritten by the HTTP phase's assignment.
+    _record(result, "dns")
+    if "dns" in phases:
+        _run_dns(result, store)
+
     # --------------------------------------------- reserved (not built yet)
-    # ``dns``/``tls``/``files`` are named in the data model but have no analyzer
-    # yet.  Log it so a run that requested them is not silently short of
-    # evidence; they are deliberately absent from ``result.phases``.
-    for pending in ("dns", "tls", "files"):
+    # ``tls``/``files`` are named in the data model but have no analyzer yet.
+    # Log it so a run that requested them is not silently short of evidence;
+    # they are deliberately absent from ``result.phases``.
+    for pending in ("tls", "files"):
         if pending in phases:
             log.info("phase %r is not implemented yet; skipped", pending)
 
@@ -256,6 +265,48 @@ def _run_http(result: CaseResult, store: CaseStore, streams) -> None:
         len(analysis.exchanges),
         len(findings),
         len(streams),
+    )
+
+
+def _run_dns(result: CaseResult, store: CaseStore) -> None:
+    """Parse DNS from raw port-53 payloads and run the DNS detectors.
+
+    Runs for either reader because it works on the normalised payload rather
+    than on dissector fields.  Findings are appended to any HTTP findings that
+    already ran, and written to the shared ``findings`` dataset.
+    """
+    analysis = dns_analyzer.analyze(result.ctx)
+    result.dns_stats = analysis.stats
+    result.dns_top = [{"name": name, "count": count} for name, count in analysis.stats.top_domains]
+    with store.dataset("dns") as writer:
+        writer.write_many(analysis.records)
+    for warning in analysis.warnings:
+        result.ctx.warn(warning)
+
+    signatures = load_signatures(result.ctx.config.effective_signature_dir)
+    findings = dns_detector.detect(
+        analysis.records,
+        config=result.ctx.config,
+        signatures=signatures,
+        tunnels=analysis.tunnels,
+    )
+    result.findings = list(result.findings) + findings
+    if findings:
+        with store.dataset("findings") as writer:
+            writer.write_many(findings)
+
+    store.metadata.options["dns"] = analysis.stats.to_dict()
+    if analysis.tunnels:
+        store.metadata.options["dns_tunnels"] = [
+            candidate.to_dict() for candidate in analysis.tunnels
+        ]
+    store.metadata.options["findings_count"] = len(result.findings)
+    log.info(
+        "dns: %d message(s), %d query(ies), %d finding(s), %d tunnel candidate(s)",
+        len(analysis.records),
+        analysis.stats.queries,
+        len(findings),
+        len(analysis.tunnels),
     )
 
 
