@@ -147,7 +147,11 @@ def normalize(raw, *, number: int) -> NormalizedPacket | None:
     if tcp is not None:
         transport = "TCP"
         src_port, dst_port = tcp.sport, tcp.dport
-        seq, ack = int(tcp.seq), int(tcp.ack)
+        # Scapy leaves ``ack`` as ``None`` on bare SYN/RST/SYN+FIN frames, where
+        # the ack field is not meaningfully present.  ``int(None)`` raises, so
+        # only convert when the field is actually set.
+        seq = int(tcp.seq) if tcp.seq is not None else None
+        ack = int(tcp.ack) if tcp.ack is not None else None
         flags = _tcp_flags(tcp)
         syn, fin, rst = bool(tcp.flags.S), bool(tcp.flags.F), bool(tcp.flags.R)
         payload = bytes(tcp.payload) if tcp.payload else b""
@@ -211,15 +215,20 @@ def iter_payloads(
             if max_packets and count >= max_packets:
                 break
             count += 1
-            tcp = raw.getlayer("TCP") if hasattr(raw, "getlayer") else None
-            udp = raw.getlayer("UDP") if hasattr(raw, "getlayer") else None
-            layer = tcp if tcp is not None else udp
-            if layer is None:
+            try:
+                tcp = raw.getlayer("TCP") if hasattr(raw, "getlayer") else None
+                udp = raw.getlayer("UDP") if hasattr(raw, "getlayer") else None
+                layer = tcp if tcp is not None else udp
+                if layer is None:
+                    continue
+                ip = raw.getlayer("IP") if hasattr(raw, "getlayer") else None
+                ip6 = raw.getlayer("IPv6") if hasattr(raw, "getlayer") else None
+                src = getattr(ip, "src", None) or getattr(ip6, "src", None)
+                payload = bytes(layer.payload) if layer.payload else b""
+            except Exception as exc:
+                # A single malformed frame must not abort the payload sweep.
+                log.warning("scapy could not dissect packet %d: %s", count, exc)
                 continue
-            ip = raw.getlayer("IP")
-            ip6 = raw.getlayer("IPv6")
-            src = getattr(ip, "src", None) or getattr(ip6, "src", None)
-            payload = bytes(layer.payload) if layer.payload else b""
             yield (
                 count,
                 float(getattr(raw, "time", 0.0) or 0.0),
@@ -299,7 +308,7 @@ def _sniff_payload_protocols(raw) -> list[str]:
     if not payload:
         return []
     out: list[str] = []
-    if payload[:1] == b"\x16" and payload[1] == 0x03:
+    if len(payload) >= 2 and payload[0] == 0x16 and payload[1] == 0x03:
         out.append("tls")
     elif payload[:3] in (b"GET", b"PUT", b"POS") or payload[:4] in (b"HEAD", b"HTTP"):
         out.append("http")

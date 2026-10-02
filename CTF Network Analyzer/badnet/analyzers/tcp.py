@@ -356,7 +356,12 @@ def _read_segments_scapy(
             if ctx.max_packets and count >= ctx.max_packets:
                 break
             count += 1
-            packet = scapy_reader.normalize(raw, number=count)
+            try:
+                packet = scapy_reader.normalize(raw, number=count)
+            except Exception as exc:
+                # One malformed frame must not abort reassembly of the capture.
+                log.warning("scapy could not normalise packet %d: %s", count, exc)
+                continue
             if packet is None or packet.tcp_stream is None or packet.tcp_stream != stream_id:
                 continue
             payload_hex = packet.payload_hex or ""

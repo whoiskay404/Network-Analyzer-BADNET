@@ -210,9 +210,12 @@ $ badnet search capture.pcap --literal -i -e 'FLAG{'
 $ badnet search output/capture-516a10a3 --regex 'password|token'   # reuse a case
 ```
 
-Searches reassembled TCP payload and records every hit (offset, direction,
-context) in `search.ndjson`. Offsets refer to the reassembled stream, so a hole
-left by a lost packet shifts later offsets. `--literal` (`-F`) skips the regex
+Searches reassembled TCP payload **and** individual UDP/ICMP datagrams, recording
+every hit (offset, direction, context) in `search.ndjson`. TCP offsets refer to
+the reassembled stream, so a hole left by a lost packet shifts later offsets;
+UDP/ICMP hits are labelled per packet (`udp-packet-N` / `icmp-packet-N`) and the
+offset is relative to that datagram. This is what makes DNS tunnelling and custom
+UDP protocols searchable. `--literal` (`-F`) skips the regex
 engine entirely and is the safe choice for hostile input; patterns with nested
 quantifiers are refused before they run.
 
@@ -407,13 +410,13 @@ $ source .venv/bin/activate
 $ pip install -e ".[dev]"
 
 $ pytest -q
-129 passed
+137 passed
 
 $ ruff check .
 All checks passed!
 
 $ ruff format --check .
-65 files already formatted
+66 files already formatted
 ```
 
 Tests run the real pipeline against a freshly generated capture, so a tshark

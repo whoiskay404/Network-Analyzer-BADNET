@@ -340,6 +340,13 @@ _KNOWN_KEYS = set(_SECTIONS) | set(_SCALARS)
 def _apply_file(cfg: Config, path: Path) -> None:
     try:
         text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        # UnicodeDecodeError subclasses ValueError, not OSError, so it must be
+        # listed explicitly or a non-UTF-8 ./badnet.yaml escapes as a traceback.
+        raise ConfigError(
+            f"config {path} is not valid UTF-8: {exc}",
+            hint="save the file as UTF-8 (a Windows editor may have written cp1252)",
+        ) from exc
     except OSError as exc:
         raise ConfigError(f"cannot read config {path}: {exc}") from exc
     try:
@@ -412,7 +419,12 @@ def _apply_mapping(cfg: Config, data: dict[str, Any], *, origin: str) -> None:
             if key in ("output_dir", "signature_dir"):
                 value = Path(str(value)).expanduser()
             if key == "interesting_ports":
-                value = [int(p) for p in value]
+                try:
+                    value = [int(p) for p in value]
+                except (TypeError, ValueError) as exc:
+                    raise ConfigError(
+                        f"{origin}: 'interesting_ports' must be a list of integers"
+                    ) from exc
             if key in ("interesting_endpoints", "interesting_extensions"):
                 value = [str(v) for v in value]
             setattr(cfg, key, value)

@@ -209,6 +209,14 @@ def _run_phases(
     if "http" in phases:
         _run_http(result, store, streams)
 
+    # --------------------------------------------- reserved (not built yet)
+    # ``dns``/``tls``/``files`` are named in the data model but have no analyzer
+    # yet.  Log it so a run that requested them is not silently short of
+    # evidence; they are deliberately absent from ``result.phases``.
+    for pending in ("dns", "tls", "files"):
+        if pending in phases:
+            log.info("phase %r is not implemented yet; skipped", pending)
+
 
 def _run_http(result: CaseResult, store: CaseStore, streams) -> None:
     """Parse HTTP exchanges and run the HTTP detectors over them.

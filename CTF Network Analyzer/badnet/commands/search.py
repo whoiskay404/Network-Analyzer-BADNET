@@ -4,10 +4,14 @@ The target may be a capture file or an existing case directory.  Given a case,
 BADNET reopens the capture recorded in ``metadata.json`` rather than re-analysing
 it, so the search result and the earlier analysis always agree byte for byte.
 
-Only TCP payload is searched, because reassembly is what makes an offset
-meaningful.  A match is reported against the *reassembled* stream: if packets
-were lost, the reconstruction has zero-filled holes and offsets after a hole are
-approximate.  That limitation is stated in the output rather than hidden.
+Both TCP and non-TCP payloads are searched.  TCP is reassembled first, because
+reassembly is what makes an offset meaningful; UDP and ICMP have no byte stream
+to reassemble, so each datagram is searched on its own.  A TCP match is reported
+against the *reassembled* stream: if packets were lost, the reconstruction has
+zero-filled holes and offsets after a hole are approximate.  A datagram match is
+reported against a single packet (``udp-packet-N`` / ``icmp-packet-N``) and its
+offset is relative to that payload.  Those limitations are stated in the output
+rather than hidden.
 
 Regex safety: the standard library has no regex timeout, so ``--literal`` is the
 recommended mode for hostile input.  A pattern with nested quantifiers is
@@ -57,30 +61,38 @@ def run(
 
     hits: list = []
     searched = 0
+    datagrams_searched = 0
     regex_seconds = 0.0
     budget_exhausted = False
-    for stream_id, direction, blob, source in search_analyzer.iter_stream_payloads(
-        pipeline_ctx, streams
-    ):
-        if len(hits) >= cap:
-            break
-        started = time.monotonic()
-        hits.extend(
-            search_analyzer.search_blob(
-                blob,
-                pattern,
-                stream_id=stream_id,
-                direction=direction,
-                source=source,
-                max_hits=cap - len(hits),
+
+    def _sweep(items) -> int:
+        nonlocal regex_seconds, budget_exhausted
+        count = 0
+        for stream_id, direction, blob, source in items:
+            if len(hits) >= cap:
+                break
+            started = time.monotonic()
+            hits.extend(
+                search_analyzer.search_blob(
+                    blob,
+                    pattern,
+                    stream_id=stream_id,
+                    direction=direction,
+                    source=source,
+                    max_hits=cap - len(hits),
+                )
             )
-        )
-        regex_seconds += time.monotonic() - started
-        searched += 1
-        if regex_seconds >= budget_seconds:
-            # The budget measures regex execution only; reassembly is not charged.
-            budget_exhausted = True
-            break
+            regex_seconds += time.monotonic() - started
+            count += 1
+            if regex_seconds >= budget_seconds:
+                # The budget measures regex execution only; reassembly is not charged.
+                budget_exhausted = True
+                break
+        return count
+
+    searched = _sweep(search_analyzer.iter_stream_payloads(pipeline_ctx, streams))
+    if not budget_exhausted and len(hits) < cap:
+        datagrams_searched = _sweep(search_analyzer.iter_datagram_payloads(pipeline_ctx))
 
     if hits:
         with store.dataset("search") as writer:
@@ -105,6 +117,7 @@ def run(
                 "literal": literal,
                 "ignore_case": ignore_case,
                 "streams_searched": searched,
+                "datagrams_searched": datagrams_searched,
                 "hits": len(hits),
                 "capped": len(hits) >= cap,
                 "budget_exhausted": budget_exhausted,
@@ -118,7 +131,8 @@ def run(
     term.section(console, "Search", subtitle=f"{regex} in {capture_path.name}")
     if not hits:
         console.print(
-            f"  [dim]no match in {searched} stream direction(s); "
+            f"  [dim]no match in {searched} stream direction(s) and "
+            f"{datagrams_searched} datagram(s); "
             "try --literal, -i, or a simpler pattern[/dim]"
         )
         return hits

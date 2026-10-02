@@ -166,3 +166,36 @@ def iter_stream_payloads(
                 data.server_to_client,
                 f"tcp-stream-{stream.stream_id}",
             )
+
+
+def iter_datagram_payloads(
+    ctx: PipelineContext,
+    *,
+    limit: int | None = None,
+):
+    """Yield ``(packet_no, direction, data, source)`` for UDP/ICMP payloads.
+
+    TCP is covered by stream reassembly, where an offset is meaningful.  UDP and
+    ICMP have no byte stream to reassemble, so each datagram is searched on its
+    own: the offset is relative to that packet's payload and the source label
+    (``udp-packet-N`` / ``icmp-packet-N``) says exactly which one.  This is what
+    makes DNS tunnelling and custom UDP protocols searchable at all.
+    """
+    yielded = 0
+    for packet in ctx.iter_packets():
+        if limit is not None and yielded >= limit:
+            return
+        transport = (packet.transport or "").lower()
+        if transport not in ("udp", "icmp"):
+            continue
+        payload_hex = packet.payload_hex or ""
+        if not payload_hex:
+            continue
+        try:
+            data = bytes.fromhex(payload_hex)
+        except ValueError:
+            continue
+        if not data:
+            continue
+        yielded += 1
+        yield packet.number, transport, data, f"{transport}-packet-{packet.number}"

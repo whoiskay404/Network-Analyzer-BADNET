@@ -18,6 +18,7 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 
@@ -207,6 +208,46 @@ def iter_lines(
     consumed = 0
     truncated = False
     failure: ToolError | None = None
+    exhausted = False
+    timed_out = threading.Event()
+
+    def _kill_on_timeout() -> None:
+        timed_out.set()
+        try:
+            proc.kill()
+        except OSError:  # pragma: no cover - already gone
+            log.debug("kill after timeout failed for %s", argv[0])
+
+    # Drain stderr on a background thread.  Without this a child that writes more
+    # than the OS pipe buffer to stderr blocks forever while we read stdout, so
+    # the timeout timer would be the only thing to eventually free it.
+    stderr_chunks: list[bytes] = []
+    stderr_bytes = 0
+
+    def _drain_stderr() -> None:
+        nonlocal stderr_bytes
+        assert proc.stderr is not None
+        try:
+            while True:
+                chunk = proc.stderr.read(65536)
+                if not chunk:
+                    break
+                if stderr_bytes < max_output:
+                    stderr_chunks.append(chunk[: max_output - stderr_bytes])
+                    stderr_bytes += len(chunk)
+        except Exception as exc:  # pragma: no cover - pipe closed underneath us
+            log.debug("stderr drain for %s stopped: %s", argv[0], exc)
+
+    stderr_thread = threading.Thread(target=_drain_stderr, name="badnet-stderr", daemon=True)
+    stderr_thread.start()
+
+    # Enforce the wall-clock timeout *while streaming*: killing the child closes
+    # stdout, which ends the loop below.  The old implementation only applied the
+    # timeout to a full ``communicate()`` and could hang on a verbose capture.
+    killer = threading.Timer(timeout, _kill_on_timeout)
+    killer.daemon = True
+    killer.start()
+
     try:
         for raw in proc.stdout:
             consumed += len(raw)
@@ -214,16 +255,19 @@ def iter_lines(
                 truncated = True
                 break
             yield raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        exhausted = True
     finally:
-        if truncated:
+        killer.cancel()
+        if truncated or not exhausted:
+            # Consumer stopped early (e.g. head/less) or we hit the cap: make
+            # sure the child cannot linger writing into a pipe nobody drains.
             proc.kill()
         try:
             proc.stdout.close()
         except OSError:  # pragma: no cover - already closed by GC
             log.debug("stdout already closed for %s", argv[0])
-        stderr = proc.stderr.read() if proc.stderr else b""
-        if proc.stderr:
-            proc.stderr.close()
+        stderr_thread.join(timeout=5.0)
+        stderr = b"".join(stderr_chunks)
         try:
             proc.wait(timeout=max(5.0, timeout * 0.1))
         except subprocess.TimeoutExpired:  # pragma: no cover - killed above
@@ -234,6 +278,8 @@ def iter_lines(
             # what it asked for.  A ``return`` here would also swallow any
             # exception the consumer raised while closing the generator.
             log.warning("%s output exceeded %d bytes; stream was truncated", argv[0], max_output)
+        elif timed_out.is_set():
+            failure = ToolError(f"{_label(argv)} timed out after {timeout:g}s")
         else:
             code = proc.returncode
             if code not in (0, None):

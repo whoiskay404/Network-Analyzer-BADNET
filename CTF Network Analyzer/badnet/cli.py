@@ -342,12 +342,22 @@ def handle_errors(fn):
                 "the case is marked incomplete"
             )
             raise typer.Exit(code=int(ExitCode.INTERRUPTED)) from None
+        except BrokenPipeError:  # pragma: no cover - piped to head/less
+            # Must precede OSError, of which BrokenPipeError is a subclass.
+            raise typer.Exit(code=int(ExitCode.OK)) from None
         except PermissionError as exc:
             fail(f"permission denied: {exc.filename or exc}", code=ExitCode.ERROR)
         except OSError as exc:
             fail(str(exc), code=ExitCode.ERROR)
-        except BrokenPipeError:  # pragma: no cover - piped to head/less
-            raise typer.Exit(code=int(ExitCode.OK)) from None
+        except Exception as exc:
+            # Last line of defence: a hostile capture must never surface a raw
+            # traceback as the tool's only output.  The case (if any) was already
+            # closed as ``failed`` by the orchestrator before propagating here.
+            fail(
+                f"unexpected error: {type(exc).__name__}: {exc}",
+                hint="re-run with --debug for a traceback; the case is marked failed",
+                code=ExitCode.ERROR,
+            )
 
     return wrapper
 
